@@ -1,0 +1,166 @@
+name: Release n
+
+# Патерн перенесено з mt-rust/.github/workflows/release-mt.yml (ADR 20260814-195911):
+# build matrix → Forgejo Release (замість GitHub Release) → оновлення Homebrew tap
+# 7n/homebrew. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі asset-імена
+# (n-<target>).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: n-aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset: n-x86_64-unknown-linux-musl
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --bin n
+
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/n" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifact layout
+        run: |
+          mkdir -p release
+          cp dist/n-aarch64-apple-darwin/n-aarch64-apple-darwin release/
+          cp dist/n-x86_64-unknown-linux-musl/n-x86_64-unknown-linux-musl release/
+
+      # Forgejo не має власного `gh`-аналога, преінстальованого на runners — реліз і
+      # asset-upload через REST API (Gitea-сумісний, той самий у Forgejo). NB:
+      # ${{ vars.FORGEJO_API_URL }} має вказувати на https://git.7n.ai/api/v1 —
+      # виставити як repo/org variable перед першим запуском.
+      - name: Create Forgejo Release + upload assets
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ vars.FORGEJO_API_URL }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_id=$(curl -fsS -X POST "$API/repos/$REPO/releases" \
+            -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" | jq -r .id)
+          for f in release/*; do
+            curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=$(basename "$f")" \
+              -H "Authorization: token $TOKEN" -F "attachment=@$f"
+          done
+
+  update-homebrew-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Compute version and checksums
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "sha_darwin_arm64=$(sha256sum dist/n-aarch64-apple-darwin/n-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_linux_x64=$(sha256sum dist/n-x86_64-unknown-linux-musl/n-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout 7n/homebrew
+        uses: actions/checkout@v4
+        with:
+          repository: 7n/homebrew
+          token: ${{ secrets.HOMEBREW_TAP_PAT }}
+          path: tap
+
+      - name: Update formula
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA_DARWIN: ${{ steps.meta.outputs.sha_darwin_arm64 }}
+          SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > tap/Formula/n.rb <<EOF
+          class N < Formula
+            desc "n CLI — git-дельта інструмент @7n/n"
+            homepage "https://git.7n.ai/7n/n"
+            version "${VERSION}"
+            license "ISC"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://git.7n.ai/7n/n/releases/download/${TAG}/n-aarch64-apple-darwin"
+                sha256 "${SHA_DARWIN}"
+
+                def install
+                  bin.install "n-aarch64-apple-darwin" => "n"
+                end
+              else
+                odie "n: інтел-мак поки не підтримується (немає x86_64-apple-darwin ассету)"
+              end
+            end
+
+            on_linux do
+              url "https://git.7n.ai/7n/n/releases/download/${TAG}/n-x86_64-unknown-linux-musl"
+              sha256 "${SHA_LINUX}"
+
+              def install
+                bin.install "n-x86_64-unknown-linux-musl" => "n"
+              end
+            end
+
+            test do
+              system "#{bin}/n", "--help"
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: tap
+        run: |
+          git config user.name "forgejo-actions"
+          git config user.email "forgejo-actions@git.7n.ai"
+          git add Formula/n.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git commit -m "n ${{ steps.meta.outputs.version }}"
+          git push

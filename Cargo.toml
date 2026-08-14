@@ -1,0 +1,42 @@
+[package]
+name = "n7n-git"
+version = "0.1.0"
+edition = "2021"
+description = "n — git-дельта CLI (getw/pull/push/ch): перенесення worktree-дельт з багаторівневим авторезолвом конфліктів"
+license = "ISC"
+repository = "https://git.7n.ai/7n/n"
+readme = "README.md"
+
+[[bin]]
+name = "n"
+path = "src/bin/n.rs"
+
+[lib]
+name = "n7n_git"
+path = "src/lib.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/n-{ target }{ archive-suffix }"
+pkg-fmt = "bin"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+gix = "0.70"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ACP-агентний шар (Codex/Cursor/Claude) — див. ADR 20260814-195911: перевикористання
+# наявного llm-lib замість написання LLM-частини з нуля.
+llm-lib = { git = "https://github.com/nitra/7n-rules.git", package = "llm-lib", optional = true }
+
+[features]
+default = ["agents"]
+agents = ["dep:llm-lib"]
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
