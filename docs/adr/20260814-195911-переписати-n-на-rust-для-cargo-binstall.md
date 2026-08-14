@@ -18,7 +18,8 @@ title: "Переписати @7n/n на Rust для дистрибуції че�
 
 Мотивація переходу — саме бажання писати на Rust (не побічний ефект гонитви за
 швидкістю встановлення), з прицілом отримати дистрибуцію одною командою
-(`cargo binstall n`) на різних машинах без компіляції на кожній.
+(`cargo binstall n7n-git`, бінарник лишається `n`) на різних машинах без компіляції на
+кожній.
 
 Обмеження сесії:
 - Готовність на full-rewrite з нуля (без поетапної гібридності).
@@ -34,15 +35,28 @@ title: "Переписати @7n/n на Rust для дистрибуції че�
 
 ## Considered Options
 
-- **Архітектура крейта**: один crate `n` (`lib.rs` + `src/bin/n.rs`, feature-flags за
-  зразком `llm-lib`) — CLI і library в одному пакеті.
+- **Ім'я crate**: `n` зайняте на crates.io (власник ryanli, "pipelin' 'ngine",
+  публікація 2025-09-09, майже порожній пакет) — перевірено запитом до
+  `crates.io/api/v1/crates/n`. `7n-n` невалідне (cargo/crates.io забороняють імена, що
+  починаються з цифри). Обрано `n7n-git` (вільне — перевірено) як назву пакета; бінарник
+  лишається `n` (`[[bin]] name = "n"`, той самий патерн, що `ripgrep`/`rg`) —
+  `cargo binstall n7n-git` ставить команду `n`.
+- **Архітектура крейта**: один crate `n7n-git` (`lib.rs` + `src/bin/n.rs`, feature-flags
+  за зразком `llm-lib`) — CLI і library в одному пакеті.
 - **Git/merge-рушій**: `gitoxide` для операцій, що покриваються нативно (diff,
-  merge-base, читання рефів); shell-`git` лишається для нетривіальних кейсів
-  (`git stash create`, worktree) до окремої перевірки покриття API.
+  merge-base, читання рефів, **stash create/apply/pop** — `gix-stash` реалізований;
+  **3-way merge/diff3** — `gix-merge` реалізований); shell-`git` лишається для
+  worktree-операцій (`.worktrees/`-конвенція `n`), бо `gix-worktree` — часткова
+  підтримка: взаємодія `GIT_COMMON_DIR`/`GIT_WORK_TREE` не імплементована (перевірено
+  за `crate-status.md` gitoxide).
 - **LLM-агентний шар**: ACP (`agent-client-protocol` crate) замість CLI-spawn,
   перевикористання/залежність від наявного `llm-lib`.
 - **Дистрибуція/CI**: Forgejo Actions + Forgejo Releases як джерело артефактів для
-  `cargo-binstall` (кастомний pkg-url), без npm-shim перехідного періоду.
+  `cargo-binstall`. Перевірено: binstall не має вбудованого дефолту для Forgejo (лише
+  GitHub/GitLab/Bitbucket/SourceForge/Codeberg), але явний
+  `[package.metadata.binstall] pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"`
+  працює — Forgejo Releases структурно сумісні з цим шаблоном. Без npm-shim перехідного
+  періоду.
 - **Homebrew tap**: паралельний канал дистрибуції — окрема Forgejo Actions-джоба після
   релізу оновлює формулу в [git.7n.ai/7n/homebrew](https://git.7n.ai/7n/homebrew)
   (checksums з release-артефактів → перезапис `Formula/n.rb` → commit+push через PAT),
@@ -72,13 +86,12 @@ Homebrew tap — вже перевірений в екосистемі меха�
 - Good, because Homebrew-дистрибуція теж не винаходиться заново — той самий tap і той
   самий CI-патерн (build matrix → GitHub/Forgejo Release → update-tap job), що вже
   працює для `mt`.
-- Bad, because найризикованіший відкритий момент сесії — чи `cargo-binstall` коректно
-  резолвить артефакти з Forgejo-хостингу (не GitHub) без додаткового налаштування
-  pkg-url; це варто перевірити до старту реалізації, інакше під питанням сама мотивація
-  переходу.
-- Bad, because `gitoxide` не гарантує 1:1 паритет з `git`-CLI на всі використовувані
-  операції (`git stash create` для pre-flight бекапу, worktree-менеджмент) — частина
-  git-логіки лишиться на shell-виклики до окремого дослідження покриття.
+- Bad, because `cargo-binstall` вимагає ручного `pkg-url` для Forgejo (немає дефолту) —
+  зайвий рядок конфігурації в `Cargo.toml`, який треба тримати синхронним зі структурою
+  Forgejo-релізів вручну.
+- Bad, because `gitoxide` не покриває worktree-операції (`GIT_COMMON_DIR`/`GIT_WORK_TREE`
+  не імплементовані) — `.worktrees/`-логіка `n` (`getw`) лишається на shell-`git` навіть
+  після переходу; лише stash і merge-тіри йдуть через gitoxide нативно.
 
 ## More Information
 
@@ -132,9 +145,10 @@ binstall pkg-url · 50. без власного self-update, покладаєм�
 clap/serde/tracing/тести) — не предмет дискусії, увійдуть у деталізацію реалізації без
 окремого рішення.
 
-Відкриті питання:
-- Чи `cargo-binstall` коректно резолвить артефакти з Forgejo-хостингу без додаткового
-  pkg-url-налаштування — потребує технічної перевірки до старту реалізації.
-- Покриття `gitoxide` для `git stash create` і worktree-операцій — які саме частини
-  git-логіки лишаються на shell-виклики.
-- Доступність імені `n` на crates.io.
+Відкриті питання сесії — усі закриті технічною перевіркою 2026-08-14:
+- ~~Чи `cargo-binstall` коректно резолвить артефакти з Forgejo~~ — так, через ручний
+  `pkg-url` (немає вбудованого дефолту, але шаблон працює).
+- ~~Покриття `gitoxide` для stash і worktree-операцій~~ — `gix-stash`/`gix-merge`
+  реалізовані; `gix-worktree` частковий (без `GIT_COMMON_DIR`/`GIT_WORK_TREE`) — `getw`
+  лишається на shell-`git`.
+- ~~Доступність імені `n` на crates.io~~ — зайняте; обрано `n7n-git` (бінарник `n`).
