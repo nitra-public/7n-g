@@ -43,6 +43,10 @@ title: "Переписати @7n/n на Rust для дистрибуції че�
   перевикористання/залежність від наявного `llm-lib`.
 - **Дистрибуція/CI**: Forgejo Actions + Forgejo Releases як джерело артефактів для
   `cargo-binstall` (кастомний pkg-url), без npm-shim перехідного періоду.
+- **Homebrew tap**: паралельний канал дистрибуції — окрема Forgejo Actions-джоба після
+  релізу оновлює формулу в `7n/homebrew-7n` (той самий tap, що вже використовує `mt`
+  із `mt-rust`: checksums з release-артефактів → перезапис `Formula/n.rb` → commit+push
+  через PAT), за готовим патерном `update-homebrew-tap` з `mt-rust/.github/workflows/release-mt.yml`.
 - **Інтерактивний UX**: нативний TUI fuzzy-picker (`skim`/`nucleo`) замість зовнішньої
   залежності від `fzf`.
 
@@ -50,10 +54,12 @@ title: "Переписати @7n/n на Rust для дистрибуції че�
 
 Chosen option: повний rewrite `@7n/n` на Rust у складі одного crate `n` (lib+bin),
 з gitoxide поетапно (не суцільна заміна git-викликів одразу), ACP+`llm-lib` для
-LLM-агентної частини, Forgejo Actions/Releases для CI та дистрибуції, без npm-shim
-— тому що: (1) мотивація — сам Rust, а не проміжні компроміси; (2) `llm-lib`/ACP уже
-готові й перевірені, тож найризикованіша частина (LLM-агенти) де-ризикована наперед;
-(3) єдиний crate спрощує і CLI-, і library-використання без зайвої workspace-структури.
+LLM-агентної частини, Forgejo Actions/Releases для CI та дистрибуції, плюс автопублікація
+у спільний tap `7n/homebrew-7n` за патерном `mt-rust`, без npm-shim — тому що: (1)
+мотивація — сам Rust, а не проміжні компроміси; (2) `llm-lib`/ACP уже готові й
+перевірені, тож найризикованіша частина (LLM-агенти) де-ризикована наперед; (3) єдиний
+crate спрощує і CLI-, і library-використання без зайвої workspace-структури; (4)
+Homebrew tap — вже перевірений в екосистемі механізм (`mt`), не новий винахід.
 
 ### Consequences
 
@@ -61,6 +67,9 @@ LLM-агентної частини, Forgejo Actions/Releases для CI та д�
   крос-платформно (включно з Windows нативно, без zsh).
 - Good, because LLM-агентна частина не пишеться з нуля — `llm-lib`/ACP вже існує і
   перевірена в іншому проєкті екосистеми.
+- Good, because Homebrew-дистрибуція теж не винаходиться заново — той самий tap і той
+  самий CI-патерн (build matrix → GitHub/Forgejo Release → update-tap job), що вже
+  працює для `mt`.
 - Bad, because найризикованіший відкритий момент сесії — чи `cargo-binstall` коректно
   резолвить артефакти з Forgejo-хостингу (не GitHub) без додаткового налаштування
   pkg-url; це варто перевірити до старту реалізації, інакше під питанням сама мотивація
@@ -103,7 +112,8 @@ subcommands (clap) · 31. опційні shell-hooks як plugin-система.
 **Дистрибуція/тулінг:** 32. GH Actions matrix (замінено на Forgejo, #48) · 33.
 sigstore/cosign підписування релізів · 34. npm-shim перехідного періоду (відхилено
 рішенням користувача) · 35. перевірка доступності імені `n` на crates.io · 36.
-`cargo install n --locked` як fallback · 37. Homebrew tap · 38. duct/Command-builder ·
+`cargo install n --locked` як fallback · 37. Homebrew tap (прийнято в рішення — див.
+"Дистрибуція/CI" вище, 7n/homebrew-7n за патерном mt-rust) · 38. duct/Command-builder ·
 39. serde+toml для конфігів · 40. tracing crate замість ручних print · 41. Mergiraf як
 library dependency замість спавну бінарника · 42. глобальний `--dry-run` через clap ·
 43. workspace-структура n-core/n-cli/n-git (відхилено рішенням користувача, див. #51) ·
