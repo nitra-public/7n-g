@@ -20,6 +20,9 @@ pub enum NError {
 
     #[error("git {args}: {stderr}")]
     GitCommand { args: String, stderr: String },
+
+    #[error("{0}")]
+    Message(String),
 }
 
 pub type Result<T> = std::result::Result<T, NError>;
