@@ -2781,7 +2781,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "n7n-git"
+name = "n7n-g"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",

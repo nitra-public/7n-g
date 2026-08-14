@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
-use n7n_git::pull::PullOutcome;
-use n7n_git::{ch, getw, pull, push, NError, Result};
+use n7n_g::pull::PullOutcome;
+use n7n_g::{ch, getw, pull, push, NError, Result};
 
 #[derive(Parser)]
-#[command(name = "n", version, about = "n — git-дельта CLI (getw/pull/push/ch)")]
+#[command(name = "g", version, about = "g — git-дельта CLI (getw/pull/push/ch)")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

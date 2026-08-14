@@ -1,9 +1,9 @@
-name: Release n
+name: Release g
 
 # Патерн перенесено з mt-rust/.github/workflows/release-mt.yml (ADR 20260814-195911):
 # build matrix → Forgejo Release (замість GitHub Release) → оновлення Homebrew tap
 # 7n/homebrew. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі asset-імена
-# (n-<target>).
+# (g-<target>) — бінарник називається `g` (скорочено від git), package/crate — n7n-g.
 
 on:
   push:
@@ -23,10 +23,10 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-            asset: n-aarch64-apple-darwin
+            asset: g-aarch64-apple-darwin
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            asset: n-x86_64-unknown-linux-musl
+            asset: g-x86_64-unknown-linux-musl
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -40,12 +40,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --bin n
+        run: cargo build --release --target ${{ matrix.target }} --bin g
 
       - name: Stage binary
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/n" "dist/${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/g" "dist/${{ matrix.asset }}"
           chmod +x "dist/${{ matrix.asset }}"
 
       - uses: actions/upload-artifact@v4
@@ -65,8 +65,8 @@ jobs:
       - name: Flatten artifact layout
         run: |
           mkdir -p release
-          cp dist/n-aarch64-apple-darwin/n-aarch64-apple-darwin release/
-          cp dist/n-x86_64-unknown-linux-musl/n-x86_64-unknown-linux-musl release/
+          cp dist/g-aarch64-apple-darwin/g-aarch64-apple-darwin release/
+          cp dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl release/
 
       # Forgejo не має власного `gh`-аналога, преінстальованого на runners — реліз і
       # asset-upload через REST API (Gitea-сумісний, той самий у Forgejo). NB:
@@ -100,8 +100,8 @@ jobs:
         id: meta
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "sha_darwin_arm64=$(sha256sum dist/n-aarch64-apple-darwin/n-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha_linux_x64=$(sha256sum dist/n-x86_64-unknown-linux-musl/n-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_darwin_arm64=$(sha256sum dist/g-aarch64-apple-darwin/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_linux_x64=$(sha256sum dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout 7n/homebrew
         uses: actions/checkout@v4
@@ -117,37 +117,37 @@ jobs:
           SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
           TAG: ${{ github.ref_name }}
         run: |
-          cat > tap/Formula/n.rb <<EOF
-          class N < Formula
-            desc "n CLI — git-дельта інструмент @7n/n"
+          cat > tap/Formula/g.rb <<EOF
+          class G < Formula
+            desc "g CLI — git-дельта інструмент @7n/n (скорочено від git)"
             homepage "https://git.7n.ai/7n/n"
             version "${VERSION}"
             license "ISC"
 
             on_macos do
               if Hardware::CPU.arm?
-                url "https://git.7n.ai/7n/n/releases/download/${TAG}/n-aarch64-apple-darwin"
+                url "https://git.7n.ai/7n/n/releases/download/${TAG}/g-aarch64-apple-darwin"
                 sha256 "${SHA_DARWIN}"
 
                 def install
-                  bin.install "n-aarch64-apple-darwin" => "n"
+                  bin.install "g-aarch64-apple-darwin" => "g"
                 end
               else
-                odie "n: інтел-мак поки не підтримується (немає x86_64-apple-darwin ассету)"
+                odie "g: інтел-мак поки не підтримується (немає x86_64-apple-darwin ассету)"
               end
             end
 
             on_linux do
-              url "https://git.7n.ai/7n/n/releases/download/${TAG}/n-x86_64-unknown-linux-musl"
+              url "https://git.7n.ai/7n/n/releases/download/${TAG}/g-x86_64-unknown-linux-musl"
               sha256 "${SHA_LINUX}"
 
               def install
-                bin.install "n-x86_64-unknown-linux-musl" => "n"
+                bin.install "g-x86_64-unknown-linux-musl" => "g"
               end
             end
 
             test do
-              system "#{bin}/n", "--help"
+              system "#{bin}/g", "--help"
             end
           end
           EOF
@@ -157,10 +157,10 @@ jobs:
         run: |
           git config user.name "forgejo-actions"
           git config user.email "forgejo-actions@git.7n.ai"
-          git add Formula/n.rb
+          git add Formula/g.rb
           if git diff --cached --quiet; then
             echo "Formula already up to date"
             exit 0
           fi
-          git commit -m "n ${{ steps.meta.outputs.version }}"
+          git commit -m "g ${{ steps.meta.outputs.version }}"
           git push

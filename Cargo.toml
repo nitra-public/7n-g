@@ -1,22 +1,22 @@
 [package]
-name = "n7n-git"
+name = "n7n-g"
 version = "0.1.0"
 edition = "2021"
-description = "n — git-дельта CLI (getw/pull/push/ch): перенесення worktree-дельт з багаторівневим авторезолвом конфліктів"
+description = "g — git-дельта CLI (getw/pull/push/ch): перенесення worktree-дельт з багаторівневим авторезолвом конфліктів"
 license = "ISC"
 repository = "https://git.7n.ai/7n/n"
 readme = "README.md"
 
 [[bin]]
-name = "n"
-path = "src/bin/n.rs"
+name = "g"
+path = "src/bin/g.rs"
 
 [lib]
-name = "n7n_git"
+name = "n7n_g"
 path = "src/lib.rs"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/n-{ target }{ archive-suffix }"
+pkg-url = "{ repo }/releases/download/v{ version }/g-{ target }{ archive-suffix }"
 pkg-fmt = "bin"
 
 [dependencies]

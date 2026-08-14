@@ -1,4 +1,4 @@
-//! `n pull [branch]` — Rust-порт `pull()` з `npm/src/pull.js` (монорепо `7n`).
+//! `g pull [branch]` — Rust-порт `pull()` з `npm/src/pull.js` (монорепо `7n`).
 //!
 //! `git fetch origin <branch>` → спершу справжній fast-forward
 //! (`git merge --ff-only`), і лише коли FF неможливий (розбіжна історія або локальні
@@ -79,7 +79,7 @@ fn revert(cwd: &Path, old_head: &str, stash_sha: Option<&str>) {
     }
 }
 
-/// `n pull [branch]` — `branch = None` означає поточну гілку
+/// `g pull [branch]` — `branch = None` означає поточну гілку
 /// (`git branch --show-current`).
 pub fn run(
     cwd: &Path,
@@ -97,7 +97,7 @@ pub fn run(
             let current = git_ok(cwd, &["branch", "--show-current"])?;
             if current.is_empty() {
                 return Err(NError::Message(
-                    "Не вдалося визначити гілку (detached HEAD?). Вкажи явно: n pull <branch>"
+                    "Не вдалося визначити гілку (detached HEAD?). Вкажи явно: g pull <branch>"
                         .into(),
                 ));
             }
