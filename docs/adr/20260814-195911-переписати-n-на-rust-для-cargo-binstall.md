@@ -44,9 +44,11 @@ title: "Переписати @7n/n на Rust для дистрибуції че�
 - **Дистрибуція/CI**: Forgejo Actions + Forgejo Releases як джерело артефактів для
   `cargo-binstall` (кастомний pkg-url), без npm-shim перехідного періоду.
 - **Homebrew tap**: паралельний канал дистрибуції — окрема Forgejo Actions-джоба після
-  релізу оновлює формулу в `7n/homebrew-7n` (той самий tap, що вже використовує `mt`
-  із `mt-rust`: checksums з release-артефактів → перезапис `Formula/n.rb` → commit+push
-  через PAT), за готовим патерном `update-homebrew-tap` з `mt-rust/.github/workflows/release-mt.yml`.
+  релізу оновлює формулу в [git.7n.ai/7n/homebrew](https://git.7n.ai/7n/homebrew)
+  (checksums з release-артефактів → перезапис `Formula/n.rb` → commit+push через PAT),
+  за готовим патерном `update-homebrew-tap` з `mt-rust/.github/workflows/release-mt.yml`
+  (там tap — `nitra/homebrew-7n` на GitHub; для `n` той самий підхід, інший host і repo:
+  `7n/homebrew` на Forgejo).
 - **Інтерактивний UX**: нативний TUI fuzzy-picker (`skim`/`nucleo`) замість зовнішньої
   залежності від `fzf`.
 
@@ -55,7 +57,7 @@ title: "Переписати @7n/n на Rust для дистрибуції че�
 Chosen option: повний rewrite `@7n/n` на Rust у складі одного crate `n` (lib+bin),
 з gitoxide поетапно (не суцільна заміна git-викликів одразу), ACP+`llm-lib` для
 LLM-агентної частини, Forgejo Actions/Releases для CI та дистрибуції, плюс автопублікація
-у спільний tap `7n/homebrew-7n` за патерном `mt-rust`, без npm-shim — тому що: (1)
+у tap `7n/homebrew` (Forgejo) за патерном `mt-rust`, без npm-shim — тому що: (1)
 мотивація — сам Rust, а не проміжні компроміси; (2) `llm-lib`/ACP уже готові й
 перевірені, тож найризикованіша частина (LLM-агенти) де-ризикована наперед; (3) єдиний
 crate спрощує і CLI-, і library-використання без зайвої workspace-структури; (4)
@@ -113,7 +115,8 @@ subcommands (clap) · 31. опційні shell-hooks як plugin-система.
 sigstore/cosign підписування релізів · 34. npm-shim перехідного періоду (відхилено
 рішенням користувача) · 35. перевірка доступності імені `n` на crates.io · 36.
 `cargo install n --locked` як fallback · 37. Homebrew tap (прийнято в рішення — див.
-"Дистрибуція/CI" вище, 7n/homebrew-7n за патерном mt-rust) · 38. duct/Command-builder ·
+"Дистрибуція/CI" вище, 7n/homebrew на Forgejo за патерном mt-rust) · 38.
+duct/Command-builder ·
 39. serde+toml для конфігів · 40. tracing crate замість ручних print · 41. Mergiraf як
 library dependency замість спавну бінарника · 42. глобальний `--dry-run` через clap ·
 43. workspace-структура n-core/n-cli/n-git (відхилено рішенням користувача, див. #51) ·
