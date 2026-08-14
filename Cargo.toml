@@ -27,6 +27,7 @@ serde_json = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3"
 
 # ACP-агентний шар (Codex/Cursor/Claude) — див. ADR 20260814-195911: перевикористання
 # наявного llm-lib замість написання LLM-частини з нуля.

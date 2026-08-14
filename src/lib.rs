@@ -17,6 +17,9 @@ pub enum NError {
 
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("git {args}: {stderr}")]
+    GitCommand { args: String, stderr: String },
 }
 
 pub type Result<T> = std::result::Result<T, NError>;
