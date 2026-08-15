@@ -2785,6 +2785,7 @@ name = "n7n-g"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "chrono",
  "clap",
  "ctrlc",
  "gix",
