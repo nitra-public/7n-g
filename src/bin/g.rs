@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use n7n_g::ch::ChReport;
 use n7n_g::getw::{GetwOutcome, WorktreeCandidate, WorktreePicker};
 use n7n_g::pull::PullOutcome;
+use n7n_g::push::PushOutcome;
 use n7n_g::{ch, getw, pull, push, NError, Result};
 
 #[derive(Parser)]
@@ -35,7 +36,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Getw => run_getw(),
         Command::Pull { branch } => run_pull(branch.as_deref()),
-        Command::Push { branch } => push::run(branch.as_deref()),
+        Command::Push { branch } => run_push(branch.as_deref()),
         Command::Ch { args } => run_ch(&args),
     }
 }
@@ -223,6 +224,47 @@ fn run_ch(args: &[String]) -> Result<()> {
                     written.len() + failures.len()
                 )))
             }
+        }
+    }
+}
+
+fn run_push(branch: Option<&str>) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let outcome = push::run(&cwd, branch, None, None)?;
+    match outcome {
+        PushOutcome::NothingToPush { base } => {
+            println!("✅ Немає змін відносно {base} — пушити нічого. 👋");
+            Ok(())
+        }
+        PushOutcome::Done {
+            branch,
+            subject,
+            file_names,
+            adr_count,
+            pushed_new_branch,
+            auto_pulled,
+            ..
+        } => {
+            if auto_pulled.is_some() {
+                println!("🔀 origin/{branch} мав нові коміти — підтягнуто автоматично.");
+            }
+            println!();
+            println!("📝 Commit: {subject}");
+            println!("📂 Файли:");
+            for f in &file_names {
+                println!("   {f}");
+            }
+            if adr_count > 0 {
+                println!("   📄 docs/adr/: {adr_count} файл(ів)");
+            }
+            println!();
+            println!("🚀 Пушу origin/{branch} одним комітом...");
+            if pushed_new_branch {
+                println!("✅ Готово! Нову гілку {branch} запушено (-u). 🚀");
+            } else {
+                println!("✅ Готово! Локальні зміни запушено одним комітом у origin/{branch}. 🚀");
+            }
+            Ok(())
         }
     }
 }
