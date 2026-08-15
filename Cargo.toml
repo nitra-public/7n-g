@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "g — git-дельта CLI (getw/pull/push/ch): перенесення worktree-дельт з багаторівневим авторезолвом конфліктів"
 license = "ISC"
-repository = "https://git.7n.ai/7n/n"
+repository = "https://git.7n.ai/7n/g"
 readme = "README.md"
 
 [[bin]]

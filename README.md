@@ -2,7 +2,8 @@
 
 Rust-переписання `@7n/n` (Bun/JS CLI з монорепо `7n`) — git-дельта інструмент
 (`getw`/`pull`/`push`/`ch`), дистрибутований через `cargo binstall` замість npm.
-Бінарник — `g` (скорочено від git); package/crate — `n7n-g`.
+Бінарник — `g` (скорочено від git); package/crate — `n7n-g`; репозиторій —
+[git.7n.ai/7n/g](https://git.7n.ai/7n/g).
 
 Рішення й обґрунтування: [`docs/adr/20260814-195911-переписати-n-на-rust-для-cargo-binstall.md`](docs/adr/20260814-195911-переписати-n-на-rust-для-cargo-binstall.md).
 

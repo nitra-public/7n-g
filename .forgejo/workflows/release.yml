@@ -119,14 +119,14 @@ jobs:
         run: |
           cat > tap/Formula/g.rb <<EOF
           class G < Formula
-            desc "g CLI — git-дельта інструмент @7n/n (скорочено від git)"
-            homepage "https://git.7n.ai/7n/n"
+            desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
+            homepage "https://git.7n.ai/7n/g"
             version "${VERSION}"
             license "ISC"
 
             on_macos do
               if Hardware::CPU.arm?
-                url "https://git.7n.ai/7n/n/releases/download/${TAG}/g-aarch64-apple-darwin"
+                url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-aarch64-apple-darwin"
                 sha256 "${SHA_DARWIN}"
 
                 def install
@@ -138,7 +138,7 @@ jobs:
             end
 
             on_linux do
-              url "https://git.7n.ai/7n/n/releases/download/${TAG}/g-x86_64-unknown-linux-musl"
+              url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-x86_64-unknown-linux-musl"
               sha256 "${SHA_LINUX}"
 
               def install
