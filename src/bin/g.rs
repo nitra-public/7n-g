@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use clap::{Parser, Subcommand};
+use n7n_g::ch::ChReport;
 use n7n_g::getw::{GetwOutcome, WorktreeCandidate, WorktreePicker};
 use n7n_g::pull::PullOutcome;
 use n7n_g::{ch, getw, pull, push, NError, Result};
@@ -21,7 +22,10 @@ enum Command {
     /// Сквошити локальні зміни в один коміт і запушити.
     Push { branch: Option<String> },
     /// Тонка обгортка над nitra-cursor change.
-    Ch,
+    Ch {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -32,7 +36,7 @@ fn main() -> Result<()> {
         Command::Getw => run_getw(),
         Command::Pull { branch } => run_pull(branch.as_deref()),
         Command::Push { branch } => push::run(branch.as_deref()),
-        Command::Ch => ch::run(),
+        Command::Ch { args } => run_ch(&args),
     }
 }
 
@@ -166,6 +170,57 @@ fn run_pull(branch: Option<&str>) -> Result<()> {
                 Err(NError::Message(format!(
                     "Reverse-delta мерж не завершено — розв'яжи конфлікти (git diff), потім закоміть. Повний відкат: {}",
                     backup.recover_hint
+                )))
+            }
+        }
+    }
+}
+
+fn run_ch(args: &[String]) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let report = ch::run(&cwd, args, None)?;
+    match report {
+        ChReport::Nothing { orphans } => {
+            if !orphans.is_empty() {
+                println!(
+                    "ℹ️ Поза воркспейсами (CHANGELOG не ведеться, пропускаю): {}",
+                    orphans.join(", ")
+                );
+            }
+            println!("✅ Немає змін у воркспейсах, що ведуть CHANGELOG — нічого створювати. 👋");
+            Ok(())
+        }
+        ChReport::Completed {
+            orphans,
+            skipped_by_path,
+            written,
+            failures,
+        } => {
+            if !orphans.is_empty() {
+                println!(
+                    "ℹ️ Поза воркспейсами (CHANGELOG не ведеться, пропускаю): {}",
+                    orphans.join(", ")
+                );
+            }
+            if !skipped_by_path.is_empty() {
+                println!(
+                    "↪️ --path звужує ціль, пропускаю: {}",
+                    skipped_by_path.join(", ")
+                );
+            }
+            for w in &written {
+                println!("✅ {}", w.file.display());
+            }
+            for f in &failures {
+                println!("❌ {}: {}", f.ws, f.reason);
+            }
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                Err(NError::Message(format!(
+                    "{} з {} воркспейсів не вдалося обробити",
+                    failures.len(),
+                    written.len() + failures.len()
                 )))
             }
         }

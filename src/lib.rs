@@ -3,6 +3,7 @@
 //! 20260814-195911 у `docs/adr/`.
 
 pub mod ch;
+pub mod diff_context;
 pub mod getw;
 pub mod merge;
 pub mod pull;
