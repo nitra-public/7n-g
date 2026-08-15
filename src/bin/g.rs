@@ -1,6 +1,8 @@
 use std::io::Write;
 
 use clap::{Parser, Subcommand};
+#[cfg(feature = "agents")]
+use n7n_g::acp_agents::AcpAgentAdapter;
 use n7n_g::ch::ChReport;
 use n7n_g::getw::{GetwOutcome, WorktreeCandidate, WorktreePicker};
 use n7n_g::pull::PullOutcome;
@@ -80,7 +82,14 @@ impl WorktreePicker for StdinPicker {
 
 fn run_getw() -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let outcome = getw::run(&cwd, &StdinPicker, None)?;
+    #[cfg(feature = "agents")]
+    let agent = AcpAgentAdapter::new(&cwd);
+    #[cfg(feature = "agents")]
+    let resolver = Some(&agent as &dyn n7n_g::merge::ConflictResolver);
+    #[cfg(not(feature = "agents"))]
+    let resolver: Option<&dyn n7n_g::merge::ConflictResolver> = None;
+
+    let outcome = getw::run(&cwd, &StdinPicker, resolver)?;
     match outcome {
         GetwOutcome::NoWorktrees => {
             println!("📭 У папці .worktrees не знайдено жодного робочого дерева.");
@@ -138,7 +147,14 @@ fn run_getw() -> Result<()> {
 
 fn run_pull(branch: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let outcome = pull::run(&cwd, branch, None)?;
+    #[cfg(feature = "agents")]
+    let agent = AcpAgentAdapter::new(&cwd);
+    #[cfg(feature = "agents")]
+    let resolver = Some(&agent as &dyn n7n_g::merge::ConflictResolver);
+    #[cfg(not(feature = "agents"))]
+    let resolver: Option<&dyn n7n_g::merge::ConflictResolver> = None;
+
+    let outcome = pull::run(&cwd, branch, resolver)?;
     match outcome {
         PullOutcome::AlreadyUpToDate => {
             println!(
@@ -179,7 +195,14 @@ fn run_pull(branch: Option<&str>) -> Result<()> {
 
 fn run_ch(args: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let report = ch::run(&cwd, args, None)?;
+    #[cfg(feature = "agents")]
+    let agent = AcpAgentAdapter::new(&cwd);
+    #[cfg(feature = "agents")]
+    let generator = Some(&agent as &dyn n7n_g::ch::MessageGenerator);
+    #[cfg(not(feature = "agents"))]
+    let generator: Option<&dyn n7n_g::ch::MessageGenerator> = None;
+
+    let report = ch::run(&cwd, args, generator)?;
     match report {
         ChReport::Nothing { orphans } => {
             if !orphans.is_empty() {
@@ -230,7 +253,18 @@ fn run_ch(args: &[String]) -> Result<()> {
 
 fn run_push(branch: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let outcome = push::run(&cwd, branch, None, None)?;
+    #[cfg(feature = "agents")]
+    let agent = AcpAgentAdapter::new(&cwd);
+    #[cfg(feature = "agents")]
+    let resolver = Some(&agent as &dyn n7n_g::merge::ConflictResolver);
+    #[cfg(feature = "agents")]
+    let generator = Some(&agent as &dyn n7n_g::push::CommitMessageGenerator);
+    #[cfg(not(feature = "agents"))]
+    let resolver: Option<&dyn n7n_g::merge::ConflictResolver> = None;
+    #[cfg(not(feature = "agents"))]
+    let generator: Option<&dyn n7n_g::push::CommitMessageGenerator> = None;
+
+    let outcome = push::run(&cwd, branch, resolver, generator)?;
     match outcome {
         PushOutcome::NothingToPush { base } => {
             println!("✅ Немає змін відносно {base} — пушити нічого. 👋");

@@ -35,13 +35,17 @@ ctrlc = "3"
 # крос-платформно, на відміну від shell-оригіналу (`date -r` / `stat -f`, macOS-BSD).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
-# ACP-агентний шар (Codex/Cursor/Claude) — див. ADR 20260814-195911: перевикористання
+# ACP-агентний шар (Codex/Cursor/Pi) — див. ADR 20260814-195911: перевикористання
 # наявного llm-lib замість написання LLM-частини з нуля.
 llm-lib = { git = "https://github.com/nitra/7n-rules.git", package = "llm-lib", optional = true }
+# block_on навколо async one_shot_acp у синхронних Resolver/Generator-трейтах
+# (acp_agents.rs) — сам llm-lib теж на tokio, окрема декларація потрібна для
+# виклику Runtime у нашому крейті.
+tokio = { version = "1", features = ["rt", "rt-multi-thread"], optional = true }
 
 [features]
 default = ["agents"]
-agents = ["dep:llm-lib"]
+agents = ["dep:llm-lib", "dep:tokio"]
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -68,6 +68,33 @@ pub trait CommitMessageGenerator {
     fn generate(&self, context: &str) -> std::io::Result<String>;
 }
 
+/// Rust-порт промпту `_n7push_gen_message` з JS-оригіналу — Gitmoji + Monorepo
+/// (Conventional Commits зі scope), українською. Публічна — reuse у
+/// [`CommitMessageGenerator`]-реалізаціях (напр. `acp_agents::AcpAgentAdapter`).
+pub fn commit_message_prompt(context: &str) -> String {
+    format!(
+        "Згенеруй Git commit-меседж українською у стилі Gitmoji + Monorepo (Conventional Commits зі scope).\n\
+\n\
+Формат:\n\
+  <emoji> <type>(<scope>): <короткий підсумок>\n\
+\n\
+  - <пункт тіла: що саме змінено і навіщо>\n\
+  - <ще пункт за потреби, 1-5 загалом>\n\
+\n\
+Правила:\n\
+- Мова — українська; технічні ідентифікатори, шляхи, команди та API-назви лишай англійською.\n\
+- <emoji> — доречний Gitmoji (✨ нова фіча, 🐛 фікс, ♻️ рефактор, 📝 докси, ✅ тести, 🔧 конфіг, ⬆️ оновлення залежностей, 🚀 деплой/реліз тощо).\n\
+- <type> — feat|fix|refactor|docs|test|chore|build за змістом змін.\n\
+- <scope> — назва workspace/каталогу, де основні зміни. Якщо їх кілька — обери головний.\n\
+- Subject (перший рядок) ≤ 72 символи, без крапки в кінці.\n\
+- Якщо в контексті є секція «Change-файли» — будуй меседж НАСАМПЕРЕД на їхньому описі (вони вже фіксують суть і секцію); diff там відсутній і не потрібен. Якщо change-файлів немає — визначай суть із diff.\n\
+- Виведи ЛИШЕ сам меседж: subject, далі порожній рядок, далі тіло. БЕЗ преамбул, БЕЗ code fence, БЕЗ лапок навколо.\n\
+\n\
+Контекст змін:\n\
+{context}"
+    )
+}
+
 fn run_git(cwd: &Path, args: &[&str]) -> Result<Output> {
     Command::new("git")
         .args(args)

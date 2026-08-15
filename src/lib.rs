@@ -2,6 +2,8 @@
 //! одній команді JS-оригіналу (`npm/src/*.js` у монорепо `7n`) — див. ADR
 //! 20260814-195911 у `docs/adr/`.
 
+#[cfg(feature = "agents")]
+pub mod acp_agents;
 pub mod ch;
 pub mod diff_context;
 pub mod getw;
