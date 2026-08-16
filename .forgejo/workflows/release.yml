@@ -58,7 +58,17 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
+      # tauri-образ має робочий host cc (компіляція дійшла до фінального лінку!), але
+      # без musl cross-компілятора: cc-rs (транзитивно з ring/rustls) шукає саме
+      # "x86_64-linux-musl-gcc" (спостережено 2026-08-16). Debian-пакет musl-tools дає
+      # бінарник "musl-gcc" (інша назва) — вказуємо його явно через CC_<target> env,
+      # що cc-rs розпізнає напряму, без потреби у точному імені файлу.
+      - name: Install musl-tools (musl-gcc cross compiler)
+        run: $SUDO apt-get update -qq && $SUDO apt-get install -y -qq musl-tools
+
       - name: Build
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
