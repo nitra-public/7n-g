@@ -27,24 +27,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Self-hosted forgejo-actions-runner image не має curl, а dtolnay/rust-toolchain
-      # (composite action) використовує curl для rustup-init — без цього кроку кожен
-      # запуск падає з "curl: command not found" ще до збірки (спостережено 2026-08-16).
-      - name: Ensure curl (self-hosted runner image lacks it)
-        run: command -v curl || (apt-get update -qq && apt-get install -y -qq curl)
+      # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
+      # self-hosted runner-образу з несумісними дефектами — одні без curl, одні без
+      # writable $HOME, і невідомо заздалегідь, чи є sudo (є не на всіх). $SUDO —
+      # порожній рядок, якщо sudo відсутній (тоді job явно вже виконується як root).
+      - name: Detect sudo availability
+        run: echo "SUDO=$(command -v sudo || true)" >> "$GITHUB_ENV"
 
-      # Інший варіант self-hosted runner-образу: $HOME/.rustup не створюється —
-      # "Permission denied" (спостережено 2026-08-16, /home/runner не writable для
-      # непривілейованого uid, з яким виконується job).
-      - name: Ensure writable HOME (rustup needs to create $HOME/.rustup)
-        run: sudo mkdir -p "$HOME" && sudo chown -R "$(id -u):$(id -g)" "$HOME"
+      - name: Ensure curl (self-hosted runner image lacks it)
+        run: command -v curl || ($SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl)
+
+      # $GITHUB_WORKSPACE гарантовано writable (checkout уже туди пише) — переносимо
+      # $HOME туди замість боротьби з правами оригінального $HOME (яке на одному з
+      # варіантів образу непривілейоване й без sudo для виправлення).
+      - name: Use a writable HOME for rustup
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.home"
+          echo "HOME=$GITHUB_WORKSPACE/.home" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
 
       - name: Install musl tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+        run: $SUDO apt-get update -qq && $SUDO apt-get install -y -qq musl-tools
 
       - name: Build
         run: cargo build --release --target x86_64-unknown-linux-musl --bin g

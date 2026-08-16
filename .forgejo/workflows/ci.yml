@@ -10,17 +10,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Self-hosted forgejo-actions-runner image не має curl, а dtolnay/rust-toolchain
-      # (composite action) використовує curl для rustup-init — без цього кроку кожен
-      # запуск падає з "curl: command not found" ще до збірки (спостережено 2026-08-16
-      # на 8 послідовних прогонах).
+      # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
+      # self-hosted runner-образу з несумісними дефектами — одні без curl, одні без
+      # writable $HOME, і невідомо заздалегідь, чи є sudo (є не на всіх). $SUDO —
+      # порожній рядок, якщо sudo відсутній (тоді job явно вже виконується як root).
+      - name: Detect sudo availability
+        run: echo "SUDO=$(command -v sudo || true)" >> "$GITHUB_ENV"
+      # dtolnay/rust-toolchain (composite action) використовує curl для rustup-init —
+      # без цього кроку запуск падає з "curl: command not found" ще до збірки.
       - name: Ensure curl (self-hosted runner image lacks it)
-        run: command -v curl || (apt-get update -qq && apt-get install -y -qq curl)
+        run: command -v curl || ($SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl)
       # Інший варіант self-hosted runner-образу: $HOME/.rustup не створюється —
-      # "Permission denied" (спостережено 2026-08-16, /home/runner не writable для
-      # непривілейованого uid, з яким виконується job).
-      - name: Ensure writable HOME (rustup needs to create $HOME/.rustup)
-        run: sudo mkdir -p "$HOME" && sudo chown -R "$(id -u):$(id -g)" "$HOME"
+      # "Permission denied" (/home/runner не writable), а sudo на ньому теж
+      # відсутній (спостережено 2026-08-16 — chown-фікс не спрацював саме через
+      # це). $GITHUB_WORKSPACE гарантовано writable (checkout уже туди пише) —
+      # переносимо $HOME туди замість боротьби з правами оригінального $HOME.
+      - name: Use a writable HOME for rustup
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.home"
+          echo "HOME=$GITHUB_WORKSPACE/.home" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
