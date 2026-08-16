@@ -7,9 +7,17 @@
 //! - [`merge::ConflictResolver`] і [`ch::MessageGenerator`] — у JS-оригіналі
 //!   (`omlx-resolve.mjs`/`omlx.mjs`) використовували ЛОКАЛЬНУ модель (приватно,
 //!   без cloud-підписки). Тут — `llm_lib::local_cloud::LocalCloud` (прямий
-//!   OpenAI-сумісний HTTP-виклик до omlx, дефолт `127.0.0.1:8000`), з фолбеком
-//!   на ACP-каскад, якщо `N_LOCAL_*_MODEL` не сконфігуровано чи omlx недоступний
-//!   (краще спробувати cloud, ніж мовчки нічого не зробити).
+//!   OpenAI-сумісний HTTP-виклик), з фолбеком на ACP-каскад, якщо
+//!   `N_LOCAL_*_MODEL` не сконфігуровано чи локальний сервер недоступний (краще
+//!   спробувати cloud, ніж мовчки нічого не зробити). Дефолтний `base_url` —
+//!   `127.0.0.1:8000` (типовий порт omlx); для інших локальних серверів
+//!   (перевірено з [TurboFieldfare](https://github.com/drumih/turbo-fieldfare),
+//!   Swift/Metal-рантайм для Gemma 4 на Apple Silicon, дефолтний порт `8080`) —
+//!   виставити `N_LOCAL_OPENAI_BASE_URL` і `N_LOCAL_MIN_MODEL=omlx/<model-id
+//!   сервера>` (провайдер-префікс `omlx` — фіксований ключ нашої provider-мапи
+//!   нижче, `<model-id>` має збігатись із тим, що сервер реально віддає в
+//!   `/v1/models`, а не з довільною назвою — сервер повертає 404
+//!   `model_not_found`, якщо не збігається).
 //! - [`push::CommitMessageGenerator`] — у JS-оригіналі використовував саме
 //!   cloud CLI-агенти (`pi`/`claude`/`cursor-agent`). Тут — лише ACP-каскад
 //!   (`Cursor` → `Codex` → `Pi`, перший непорожній результат перемагає), без
@@ -71,10 +79,21 @@ impl AcpAgentAdapter {
     /// `None`, якщо жодного не сконфігуровано чи виклик не вдався (тоді
     /// викликач фолбечить на [`Self::acp_cascade`]).
     fn local_omlx(&self, prompt: &str) -> Option<String> {
-        self.block_on(self.local.one_shot(Tier::Min, None, prompt))
-            .ok()?
-            .ok()
-            .filter(|t| !t.trim().is_empty())
+        match self.block_on(self.local.one_shot(Tier::Min, None, prompt)) {
+            Ok(Ok(text)) if !text.trim().is_empty() => Some(text),
+            Ok(Ok(_)) => {
+                eprintln!("local_omlx: порожня відповідь");
+                None
+            }
+            Ok(Err(e)) => {
+                eprintln!("local_omlx: LlmError: {e}");
+                None
+            }
+            Err(e) => {
+                eprintln!("local_omlx: io error (tokio runtime): {e}");
+                None
+            }
+        }
     }
 
     fn acp_cascade(&self, cwd: &Path, prompt: &str) -> std::io::Result<String> {
@@ -162,8 +181,13 @@ mod tests {
         println!("ACP response: {out:?}");
     }
 
-    /// Ручна перевірка: потребує запущеного omlx-сервера (`http://127.0.0.1:8000`)
-    /// і `N_LOCAL_MIN_MODEL` в env. `#[ignore]` з тієї самої причини.
+    /// Ручна перевірка: потребує запущеного локального OpenAI-сумісного сервера
+    /// й `N_LOCAL_MIN_MODEL=omlx/<model-id>` в env. `#[ignore]` з тієї самої причини.
+    /// Реально пройдено з [TurboFieldfare](https://github.com/drumih/turbo-fieldfare)
+    /// (`--port 8080`, модель `gemma-4-26b-a4b-it`):
+    /// `N_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:8080/v1/
+    /// N_LOCAL_MIN_MODEL=omlx/gemma-4-26b-a4b-it cargo test --features agents
+    /// acp_agents::tests::local_omlx_returns_text_when_configured -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn local_omlx_returns_text_when_configured() {
