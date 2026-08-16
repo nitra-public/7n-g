@@ -43,11 +43,16 @@ jobs:
 
       # $GITHUB_WORKSPACE гарантовано writable (checkout уже туди пише) — переносимо
       # $HOME туди замість боротьби з правами оригінального $HOME (яке на одному з
-      # варіантів образу непривілейоване й без sudo для виправлення).
-      - name: Use a writable HOME for rustup
+      # варіантів образу непривілейоване й без sudo для виправлення). На tauri-образі
+      # rustup вже преінстальований у /opt/rustup (root-only) — RUSTUP_HOME/CARGO_HOME
+      # теж переносимо в workspace, інакше "could not create temp file
+      # /opt/rustup/tmp/...: Permission denied" (спостережено 2026-08-16).
+      - name: Use writable HOME/RUSTUP_HOME/CARGO_HOME for rustup
         run: |
           mkdir -p "$GITHUB_WORKSPACE/.home"
           echo "HOME=$GITHUB_WORKSPACE/.home" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$GITHUB_WORKSPACE/.rustup" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$GITHUB_WORKSPACE/.cargo" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
