@@ -103,8 +103,14 @@ jobs:
           echo "CC_x86_64_unknown_linux_musl=$ZIG_DIR/musl-cc" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=$ZIG_DIR/musl-cc" >> "$GITHUB_ENV"
 
+      # Rust за замовчуванням для musl-таргету сам додає self-contained crt-об'єкти
+      # (rcrt1.o/crti.o/crtn.o зі свого sysroot) ПОВЕРХ тих, що вже несе Zig-овий
+      # musl-сисрут через "-target x86_64-linux-musl" — колізія symbol _start/_init/
+      # _fini/_start_c ("ld.lld: error: duplicate symbol", спостережено 2026-08-16).
+      # link-self-contained=-crt-objects вимикає rust-side crt-обʼєкти, лишає їх
+      # виключно за Zig-toolchain.
       - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl --bin g
+        run: RUSTFLAGS="-C link-self-contained=-crt-objects" cargo build --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
         run: |
