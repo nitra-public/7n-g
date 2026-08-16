@@ -2662,26 +2662,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
-name = "llm-lib"
-version = "0.2.4"
-source = "git+https://github.com/nitra/7n-rules.git#8452fdb406c45412c90092094af43fd5fb961b4b"
-dependencies = [
- "agent-client-protocol",
- "bytes",
- "futures",
- "genai",
- "http",
- "reqwest 0.12.28",
- "rig-agent",
- "rig-core",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2789,7 +2769,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "gix",
- "llm-lib",
+ "n7n-llm-lib",
  "predicates",
  "serde",
  "serde_json",
@@ -2798,6 +2778,27 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "n7n-llm-lib"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3e8f0cbfcb5e9ca386e9d8a8de1c56c5f44da358f1bffdb0e31376bc7a6c78a"
+dependencies = [
+ "agent-client-protocol",
+ "bytes",
+ "futures",
+ "genai",
+ "http",
+ "reqwest 0.12.28",
+ "rig-agent",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

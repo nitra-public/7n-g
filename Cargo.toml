@@ -35,9 +35,11 @@ ctrlc = "3"
 # крос-платформно, на відміну від shell-оригіналу (`date -r` / `stat -f`, macOS-BSD).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
-# ACP-агентний шар (Codex/Cursor/Pi) — див. ADR 20260814-195911: перевикористання
-# наявного llm-lib замість написання LLM-частини з нуля.
-llm-lib = { git = "https://github.com/nitra/7n-rules.git", package = "llm-lib", optional = true }
+# ACP-агентний шар (Codex/Cursor/Pi) + local_cloud (omlx) — див. ADR 20260814-195911:
+# перевикористання наявного llm-lib замість написання LLM-частини з нуля. Опубліковано
+# на crates.io під n7n-llm-lib (lib-ім'я лишається llm_lib) — той самий крейт, що й в
+# екосистемі 7n-rules, тепер versioned dependency замість git.
+llm-lib = { version = "0.2.4", package = "n7n-llm-lib", optional = true }
 # block_on навколо async one_shot_acp у синхронних Resolver/Generator-трейтах
 # (acp_agents.rs) — сам llm-lib теж на tokio, окрема декларація потрібна для
 # виклику Runtime у нашому крейті.
