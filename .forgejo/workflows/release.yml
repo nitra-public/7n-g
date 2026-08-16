@@ -58,17 +58,36 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
-      # tauri-образ має робочий host cc (компіляція дійшла до фінального лінку!), але
-      # без musl cross-компілятора: cc-rs (транзитивно з ring/rustls) шукає саме
-      # "x86_64-linux-musl-gcc" (спостережено 2026-08-16). Debian-пакет musl-tools дає
-      # бінарник "musl-gcc" (інша назва) — вказуємо його явно через CC_<target> env,
-      # що cc-rs розпізнає напряму, без потреби у точному імені файлу.
-      - name: Install musl-tools (musl-gcc cross compiler)
-        run: $SUDO apt-get update -qq && $SUDO apt-get install -y -qq musl-tools
+      # apt виявився непрацездатним і на tauri-образі ("Permission denied" на
+      # /var/lib/apt/lists, той самий дефект, що на інших варіантах — 2026-08-16).
+      # cc-rs (транзитивно з ring/rustls) шукає "x86_64-linux-musl-gcc" для build.rs,
+      # а фінальний rustc-лінк для musl-таргету теж потребує cross-лінкер. Zig — єдиний
+      # шлях без apt/root: несе власний musl-сумісний "cc" (curl+tar уже підтверджено
+      # робочі на цьому образі; python3-lzma — фолбек, якщо системний tar без вбудованої
+      # xz-підтримки).
+      - name: Install zig as drop-in musl cc/linker (no apt/root needed)
+        run: |
+          ZIG_DIR="$GITHUB_WORKSPACE/.zig"
+          mkdir -p "$ZIG_DIR" /tmp/zig-extract
+          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+          if ! tar -xf /tmp/zig.tar.xz -C /tmp/zig-extract --strip-components=1 2>/dev/null; then
+            python3 - <<'PYEOF'
+          import lzma, os, shutil, tarfile
+
+          with lzma.open("/tmp/zig.tar.xz") as f, tarfile.open(fileobj=f) as tar:
+              top = tar.getnames()[0].split("/")[0]
+              tar.extractall("/tmp/zig-raw")
+          for name in os.listdir(os.path.join("/tmp/zig-raw", top)):
+              shutil.move(os.path.join("/tmp/zig-raw", top, name), "/tmp/zig-extract")
+          PYEOF
+          fi
+          cp -r /tmp/zig-extract/. "$ZIG_DIR/"
+          printf '#!/bin/sh\nexec "%s/zig" cc -target x86_64-linux-musl "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/musl-cc"
+          chmod +x "$ZIG_DIR/musl-cc"
+          echo "CC_x86_64_unknown_linux_musl=$ZIG_DIR/musl-cc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=$ZIG_DIR/musl-cc" >> "$GITHUB_ENV"
 
       - name: Build
-        env:
-          CC_x86_64_unknown_linux_musl: musl-gcc
         run: cargo build --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
