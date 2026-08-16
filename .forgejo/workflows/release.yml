@@ -101,7 +101,10 @@ jobs:
           cp target/x86_64-unknown-linux-musl/release/g dist/g-x86_64-unknown-linux-musl
           chmod +x dist/g-x86_64-unknown-linux-musl
 
-      - uses: actions/upload-artifact@v4
+      # v4+ (@actions/artifact v2+ протокол) не підтримується на Forgejo/GHES-сумісних
+      # runner'ах ("GHESNotSupportedError", спостережено 2026-08-16, ПІСЛЯ успішного
+      # білду — це вже не build-помилка). v3 сумісний.
+      - uses: actions/upload-artifact@v3
         with:
           name: g-x86_64-unknown-linux-musl
           path: dist/g-x86_64-unknown-linux-musl
@@ -111,7 +114,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           path: dist
 
@@ -146,7 +149,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v3
         with:
           path: dist
 
