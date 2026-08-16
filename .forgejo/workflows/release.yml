@@ -110,7 +110,7 @@ jobs:
       # link-self-contained=-crt-objects вимикає rust-side crt-обʼєкти, лишає їх
       # виключно за Zig-toolchain.
       - name: Build
-        run: RUSTFLAGS="-C link-self-contained=-crt-objects" cargo build --release --target x86_64-unknown-linux-musl --bin g
+        run: RUSTFLAGS="-C link-self-contained=-crto" cargo build --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
         run: |
