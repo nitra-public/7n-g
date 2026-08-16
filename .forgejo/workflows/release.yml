@@ -23,7 +23,11 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # git.7n.ai: "ubuntu-latest" мапиться на непослідовний fleet self-hosted-образів,
+    # частина з яких бракує базових утиліт (curl/apt/sudo/xz/python3 залежно від
+    # конкретного варіанту, спостережено 2026-08-16). "tauri" — окремий, повноцінно
+    # оснащений runner (Tauri-збірки вимагають повний C-тулчейн) — пробуємо його.
+    runs-on: tauri
     steps:
       - uses: actions/checkout@v4
 
@@ -49,40 +53,8 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
-      # apt-get на цьому варіанті runner-образу не працює НАВІТЬ на update (non-root,
-      # без sudo, "Permission denied" на /var/lib/apt/lists) — системний musl-gcc
-      # недосяжний. cargo-zigbuild несе власний cross-лінкер (Zig), без apt/root —
-      # той самий патерн, що мт-rust/.github/workflows/release-mt.yml. Розпаковуємо
-      # .tar.xz через python3 stdlib (lzma+tarfile) — системного бінарника `xz` теж
-      # немає на цьому образі ("tar (child): xz: Cannot exec: No such file or
-      # directory", спостережено 2026-08-16).
-      - name: Install zig (self-contained C toolchain — no apt/root/xz needed)
-        run: |
-          ZIG_DIR="$GITHUB_WORKSPACE/.zig"
-          mkdir -p "$ZIG_DIR"
-          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
-          python3 - "$ZIG_DIR" <<'PYEOF'
-          import lzma, os, shutil, sys, tarfile
-
-          dest = sys.argv[1]
-          extract_dir = "/tmp/zig-extract"
-          with lzma.open("/tmp/zig.tar.xz") as f, tarfile.open(fileobj=f) as tar:
-              top = tar.getnames()[0].split("/")[0]
-              tar.extractall(extract_dir)
-          src = os.path.join(extract_dir, top)
-          for name in os.listdir(src):
-              shutil.move(os.path.join(src, name), dest)
-          PYEOF
-          echo "$ZIG_DIR" >> "$GITHUB_PATH"
-          printf '#!/bin/sh\nexec "%s/zig" cc "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/cc"
-          chmod +x "$ZIG_DIR/cc"
-          echo "CC=$ZIG_DIR/cc" >> "$GITHUB_ENV"
-
-      - name: Install cargo-zigbuild
-        run: cargo install --locked cargo-zigbuild
-
       - name: Build
-        run: cargo zigbuild --release --target x86_64-unknown-linux-musl --bin g
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
         run: |
