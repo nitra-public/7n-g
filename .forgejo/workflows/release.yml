@@ -49,11 +49,25 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
-      - name: Install musl tools
-        run: $SUDO apt-get update -qq && $SUDO apt-get install -y -qq musl-tools
+      # apt-get на цьому варіанті runner-образу не працює НАВІТЬ на update (non-root,
+      # без sudo, "Permission denied" на /var/lib/apt/lists) — системний musl-gcc
+      # недосяжний. cargo-zigbuild несе власний cross-лінкер (Zig), без apt/root —
+      # той самий патерн, що мт-rust/.github/workflows/release-mt.yml.
+      - name: Install zig (self-contained C toolchain — no apt/root needed)
+        run: |
+          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+          mkdir -p "$GITHUB_WORKSPACE/.zig"
+          tar -xf /tmp/zig.tar.xz -C "$GITHUB_WORKSPACE/.zig" --strip-components=1
+          echo "$GITHUB_WORKSPACE/.zig" >> "$GITHUB_PATH"
+          printf '#!/bin/sh\nexec "%s/zig" cc "$@"\n' "$GITHUB_WORKSPACE/.zig" > "$GITHUB_WORKSPACE/.zig/cc"
+          chmod +x "$GITHUB_WORKSPACE/.zig/cc"
+          echo "CC=$GITHUB_WORKSPACE/.zig/cc" >> "$GITHUB_ENV"
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild
 
       - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl --bin g
+        run: cargo zigbuild --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
         run: |
