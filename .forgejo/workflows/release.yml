@@ -4,6 +4,12 @@ name: Release g
 # build matrix → Forgejo Release (замість GitHub Release) → оновлення Homebrew tap
 # 7n/homebrew. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі asset-імена
 # (g-<target>) — бінарник називається `g` (скорочено від git), package/crate — n7n-g.
+#
+# Лише x86_64-unknown-linux-musl наразі: self-hosted Forgejo runner на git.7n.ai не має
+# зареєстрованого macOS-раннера (перевірено 2026-08-16), а cross-compile на macOS з
+# Linux потребує osxcross + витягнутий Apple SDK (ліцензійно не дистриб'юється
+# відкрито) — не робимо це наспіх. aarch64-apple-darwin — окрема задача, коли зʼявиться
+# або реальний Mac-раннер, або належно підготовлений osxcross-образ.
 
 on:
   push:
@@ -17,41 +23,36 @@ concurrency:
 
 jobs:
   build:
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-            asset: g-aarch64-apple-darwin
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            asset: g-x86_64-unknown-linux-musl
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # Self-hosted forgejo-actions-runner image не має curl, а dtolnay/rust-toolchain
+      # (composite action) використовує curl для rustup-init — без цього кроку кожен
+      # запуск падає з "curl: command not found" ще до збірки (спостережено 2026-08-16).
+      - name: Ensure curl (self-hosted runner image lacks it)
+        run: command -v curl || (apt-get update -qq && apt-get install -y -qq curl)
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-musl
 
-      - name: Install musl tools (Linux)
-        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Install musl tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --bin g
+        run: cargo build --release --target x86_64-unknown-linux-musl --bin g
 
       - name: Stage binary
         run: |
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/g" "dist/${{ matrix.asset }}"
-          chmod +x "dist/${{ matrix.asset }}"
+          cp target/x86_64-unknown-linux-musl/release/g dist/g-x86_64-unknown-linux-musl
+          chmod +x dist/g-x86_64-unknown-linux-musl
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          name: g-x86_64-unknown-linux-musl
+          path: dist/g-x86_64-unknown-linux-musl
           if-no-files-found: error
 
   release:
@@ -65,17 +66,18 @@ jobs:
       - name: Flatten artifact layout
         run: |
           mkdir -p release
-          cp dist/g-aarch64-apple-darwin/g-aarch64-apple-darwin release/
           cp dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl release/
 
       # Forgejo не має власного `gh`-аналога, преінстальованого на runners — реліз і
       # asset-upload через REST API (Gitea-сумісний, той самий у Forgejo). NB:
-      # ${{ vars.FORGEJO_API_URL }} має вказувати на https://git.7n.ai/api/v1 —
-      # виставити як repo/org variable перед першим запуском.
+      # ${{ vars.FJ_API_URL }} має вказувати на https://git.7n.ai/api/v1 — виставлено
+      # як repo variable (назва без префікса FORGEJO_ — той зарезервований платформою,
+      # POST .../actions/variables/FORGEJO_API_URL повертає "invalid secret name",
+      # перевірено 2026-08-16).
       - name: Create Forgejo Release + upload assets
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          API: ${{ vars.FORGEJO_API_URL }}
+          API: ${{ vars.FJ_API_URL }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
@@ -96,11 +98,10 @@ jobs:
         with:
           path: dist
 
-      - name: Compute version and checksums
+      - name: Compute version and checksum
         id: meta
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "sha_darwin_arm64=$(sha256sum dist/g-aarch64-apple-darwin/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "sha_linux_x64=$(sha256sum dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout 7n/homebrew
@@ -113,7 +114,6 @@ jobs:
       - name: Update formula
         env:
           VERSION: ${{ steps.meta.outputs.version }}
-          SHA_DARWIN: ${{ steps.meta.outputs.sha_darwin_arm64 }}
           SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
           TAG: ${{ github.ref_name }}
         run: |
@@ -125,16 +125,7 @@ jobs:
             license "ISC"
 
             on_macos do
-              if Hardware::CPU.arm?
-                url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-aarch64-apple-darwin"
-                sha256 "${SHA_DARWIN}"
-
-                def install
-                  bin.install "g-aarch64-apple-darwin" => "g"
-                end
-              else
-                odie "g: інтел-мак поки не підтримується (немає x86_64-apple-darwin ассету)"
-              end
+              odie "g: macOS-збірка ще не публікується (немає macOS-раннера в CI) — постав через 'cargo install n7n-g' або 'cargo binstall n7n-g' з локальною компіляцією."
             end
 
             on_linux do
