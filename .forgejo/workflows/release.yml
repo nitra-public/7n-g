@@ -82,7 +82,23 @@ jobs:
           PYEOF
           fi
           cp -r /tmp/zig-extract/. "$ZIG_DIR/"
-          printf '#!/bin/sh\nexec "%s/zig" cc -target x86_64-linux-musl "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/musl-cc"
+          # cc-rs/rustc самі додають "--target=x86_64-unknown-linux-musl" (Rust-триплет,
+          # 4 компоненти з "unknown"-vendor) поверх нашого CC-override — Zig-парсер
+          # target-query розуміє лише 3-компонентний власний формат ("unable to parse
+          # target query ...: UnknownOperatingSystem", спостережено 2026-08-16).
+          # Wrapper вирізає чужий --target=*, лишає лише свій -target x86_64-linux-musl.
+          cat > "$ZIG_DIR/musl-cc" <<WRAPEOF
+          #!/bin/bash
+          zig="$ZIG_DIR/zig"
+          args=()
+          for a in "\$@"; do
+            case "\$a" in
+              --target=*) ;;
+              *) args+=("\$a") ;;
+            esac
+          done
+          exec "\$zig" cc -target x86_64-linux-musl "\${args[@]}"
+          WRAPEOF
           chmod +x "$ZIG_DIR/musl-cc"
           echo "CC_x86_64_unknown_linux_musl=$ZIG_DIR/musl-cc" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=$ZIG_DIR/musl-cc" >> "$GITHUB_ENV"
