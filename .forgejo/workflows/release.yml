@@ -66,10 +66,31 @@ jobs:
       # "-C link-self-contained=-crto" виявився unstable-опцією на stable-каналі
       # ("only y/yes/on/n/no/off/-linker are stable", спостережено 2026-08-16).
       # cargo-zigbuild — призначений саме для цього сценарію (Rust + zig-cc +
-      # musl), сам знає правильні лінкер-прапори й сам довантажує потрібну
-      # версію zig за потреби — надійніше за власний wrapper.
+      # musl), сам знає правильні лінкер-прапори — надійніше за власний wrapper.
+      # Автозавантаження zig у ньому не спрацювало на цьому образі ("Failed to
+      # find zig", спостережено 2026-08-16) — довантажуємо zig самі (curl+tar,
+      # python3-lzma фолбек, як і раніше) й кладемо на PATH.
       - name: Install cargo-zigbuild (no apt/root needed)
         run: cargo install cargo-zigbuild --locked
+
+      - name: Install zig (cargo-zigbuild couldn't auto-download it here)
+        run: |
+          ZIG_DIR="$GITHUB_WORKSPACE/.zig"
+          mkdir -p "$ZIG_DIR" /tmp/zig-extract
+          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+          if ! tar -xf /tmp/zig.tar.xz -C /tmp/zig-extract --strip-components=1 2>/dev/null; then
+            python3 - <<'PYEOF'
+          import lzma, os, shutil, tarfile
+
+          with lzma.open("/tmp/zig.tar.xz") as f, tarfile.open(fileobj=f) as tar:
+              top = tar.getnames()[0].split("/")[0]
+              tar.extractall("/tmp/zig-raw")
+          for name in os.listdir(os.path.join("/tmp/zig-raw", top)):
+              shutil.move(os.path.join("/tmp/zig-raw", top, name), "/tmp/zig-extract")
+          PYEOF
+          fi
+          cp -r /tmp/zig-extract/. "$ZIG_DIR/"
+          echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Build
         run: cargo zigbuild --release --target x86_64-unknown-linux-musl --bin g
