@@ -16,6 +16,11 @@ jobs:
       # на 8 послідовних прогонах).
       - name: Ensure curl (self-hosted runner image lacks it)
         run: command -v curl || (apt-get update -qq && apt-get install -y -qq curl)
+      # Інший варіант self-hosted runner-образу: $HOME/.rustup не створюється —
+      # "Permission denied" (спостережено 2026-08-16, /home/runner не writable для
+      # непривілейованого uid, з яким виконується job).
+      - name: Ensure writable HOME (rustup needs to create $HOME/.rustup)
+        run: sudo mkdir -p "$HOME" && sudo chown -R "$(id -u):$(id -g)" "$HOME"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
