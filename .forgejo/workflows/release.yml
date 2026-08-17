@@ -114,15 +114,8 @@ jobs:
         if: matrix.builder == 'zigbuild'
         run: cargo install cargo-zigbuild --locked
 
-      # xwin-нога теж потребує Zig: cargo-xwin довантажує MS SDK/CRT сам, але
-      # шукає C-компілятор рівно на імʼя "clang-cl" в PATH ("Compiler family
-      # detection failed... failed to find tool 'clang-cl'", спостережено
-      # 2026-08-17, для aws-lc-sys) — на образі його нема. Zig-овий "cc" —
-      # той самий clang під капотом і підтримує рідний clang-прапор
-      # "--driver-mode=cl", тож обгортка-скрипт під іменем clang-cl працює
-      # без встановлення окремого LLVM.
       - name: Install zig (cargo-zigbuild couldn't auto-download it here)
-        if: matrix.builder == 'zigbuild' || matrix.builder == 'xwin'
+        if: matrix.builder == 'zigbuild'
         run: |
           ZIG_DIR="$GITHUB_WORKSPACE/.zig"
           mkdir -p "$ZIG_DIR" /tmp/zig-extract
@@ -147,32 +140,33 @@ jobs:
         if: matrix.builder == 'xwin'
         run: cargo install cargo-xwin --locked
 
-      # cc-rs шукає компілятор рівно на імʼя "clang-cl" в PATH для msvc-таргету
-      # (без явного CC-override) — обгортки перенаправляють на zig-овий clang
-      # через "--driver-mode=cl" (сам clang-прапор, не наш винахід).
-      # "zig lld-link" — вбудована persona Zig-ового lld для MSVC-стилю лінковки.
-      #
-      # cc-rs спочатку пробує "compiler family detection": викликає
-      # "clang-cl -E file.c" БЕЗ жодного --target (розраховуючи, що справжній
-      # standalone clang-cl-бінарник має Windows як дефолтний target, зашитий
-      # при збірці LLVM). Zig-овий "cc" — універсальний, без дефолтного target,
-      # тож без явного -target компілював під хост (Linux) — детекція падала,
-      # cc-rs не міг підтвердити "це msvc-сімʼя" і для реальних інвокацій
-      # діставав generic-фолбек із GNU-стилю "--" перед шляхом до файлу, якого
-      # clang-cl у cl-режимі не розуміє ("Unknown Clang option: '--'",
-      # спостережено 2026-08-17). Фікс — захардкодити -target у wrapper лише
-      # щоб пройшла детекція; для реальних інвокацій пізніший --target=... від
-      # cc-rs (Rust-формат triple, "pc"-vendor) просто переможе останнім і
-      # піде через СПРАВЖНІЙ clang-парсер (не zig-нативний), тож на відміну
-      # від musl-кейсу конфлікту форматів тут нема — clang розбирає обидва.
-      - name: Set up clang-cl/lld-link via Zig (cargo-xwin has no C compiler on this image)
+      # "zig cc --driver-mode=cl" виявився глухим кутом: zig-овий "cc" завжди
+      # інжектить власні hardening-прапори (-fstack-protector-strong, --param
+      # ssp-buffer-size=4 тощо) ДО обробки driver-mode, а clang-cl-парсер
+      # (MSVC-стиль) не розуміє ці GNU-прапори — "error: no such file or
+      # directory: 'ssp-buffer-size=4'" (відтворено локально 2026-08-17,
+      # структурний баг Zig, не наш wrapper). cc-rs шукає компілятор рівно на
+      # імʼя "clang-cl" в PATH — довантажуємо СПРАВЖНІЙ LLVM-реліз (легально,
+      # на відміну від Apple SDK) замість емуляції через Zig.
+      - name: Install real LLVM (clang-cl/lld-link — Zig-emulation is structurally broken for cl-mode)
         if: matrix.builder == 'xwin'
         run: |
-          ZIG_DIR="$GITHUB_WORKSPACE/.zig"
-          printf '#!/bin/sh\nexec "%s/zig" cc --driver-mode=cl -target x86_64-windows-msvc "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl"
-          printf '#!/bin/sh\nexec "%s/zig" c++ --driver-mode=cl -target x86_64-windows-msvc "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl++"
-          printf '#!/bin/sh\nexec "%s/zig" lld-link "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/lld-link"
-          chmod +x "$ZIG_DIR/clang-cl" "$ZIG_DIR/clang-cl++" "$ZIG_DIR/lld-link"
+          LLVM_DIR="$GITHUB_WORKSPACE/.llvm"
+          mkdir -p "$LLVM_DIR" /tmp/llvm-extract
+          curl -fsSL -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/LLVM-19.1.0-Linux-X64.tar.xz
+          if ! tar -xf /tmp/llvm.tar.xz -C /tmp/llvm-extract --strip-components=1 2>/dev/null; then
+            python3 - <<'PYEOF'
+          import lzma, os, shutil, tarfile
+
+          with lzma.open("/tmp/llvm.tar.xz") as f, tarfile.open(fileobj=f) as tar:
+              top = tar.getnames()[0].split("/")[0]
+              tar.extractall("/tmp/llvm-raw")
+          for name in os.listdir(os.path.join("/tmp/llvm-raw", top)):
+              shutil.move(os.path.join("/tmp/llvm-raw", top, name), "/tmp/llvm-extract")
+          PYEOF
+          fi
+          cp -r /tmp/llvm-extract/. "$LLVM_DIR/"
+          echo "$LLVM_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Build (cargo-zigbuild — musl/Apple)
         if: matrix.builder == 'zigbuild'
