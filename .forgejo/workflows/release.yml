@@ -151,12 +151,26 @@ jobs:
       # (без явного CC-override) — обгортки перенаправляють на zig-овий clang
       # через "--driver-mode=cl" (сам clang-прапор, не наш винахід).
       # "zig lld-link" — вбудована persona Zig-ового lld для MSVC-стилю лінковки.
+      #
+      # cc-rs спочатку пробує "compiler family detection": викликає
+      # "clang-cl -E file.c" БЕЗ жодного --target (розраховуючи, що справжній
+      # standalone clang-cl-бінарник має Windows як дефолтний target, зашитий
+      # при збірці LLVM). Zig-овий "cc" — універсальний, без дефолтного target,
+      # тож без явного -target компілював під хост (Linux) — детекція падала,
+      # cc-rs не міг підтвердити "це msvc-сімʼя" і для реальних інвокацій
+      # діставав generic-фолбек із GNU-стилю "--" перед шляхом до файлу, якого
+      # clang-cl у cl-режимі не розуміє ("Unknown Clang option: '--'",
+      # спостережено 2026-08-17). Фікс — захардкодити -target у wrapper лише
+      # щоб пройшла детекція; для реальних інвокацій пізніший --target=... від
+      # cc-rs (Rust-формат triple, "pc"-vendor) просто переможе останнім і
+      # піде через СПРАВЖНІЙ clang-парсер (не zig-нативний), тож на відміну
+      # від musl-кейсу конфлікту форматів тут нема — clang розбирає обидва.
       - name: Set up clang-cl/lld-link via Zig (cargo-xwin has no C compiler on this image)
         if: matrix.builder == 'xwin'
         run: |
           ZIG_DIR="$GITHUB_WORKSPACE/.zig"
-          printf '#!/bin/sh\nexec "%s/zig" cc --driver-mode=cl "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl"
-          printf '#!/bin/sh\nexec "%s/zig" c++ --driver-mode=cl "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl++"
+          printf '#!/bin/sh\nexec "%s/zig" cc --driver-mode=cl -target x86_64-windows-msvc "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl"
+          printf '#!/bin/sh\nexec "%s/zig" c++ --driver-mode=cl -target x86_64-windows-msvc "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl++"
           printf '#!/bin/sh\nexec "%s/zig" lld-link "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/lld-link"
           chmod +x "$ZIG_DIR/clang-cl" "$ZIG_DIR/clang-cl++" "$ZIG_DIR/lld-link"
 
