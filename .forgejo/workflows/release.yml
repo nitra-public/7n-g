@@ -114,8 +114,15 @@ jobs:
         if: matrix.builder == 'zigbuild'
         run: cargo install cargo-zigbuild --locked
 
+      # xwin-нога теж потребує Zig: cargo-xwin довантажує MS SDK/CRT сам, але
+      # шукає C-компілятор рівно на імʼя "clang-cl" в PATH ("Compiler family
+      # detection failed... failed to find tool 'clang-cl'", спостережено
+      # 2026-08-17, для aws-lc-sys) — на образі його нема. Zig-овий "cc" —
+      # той самий clang під капотом і підтримує рідний clang-прапор
+      # "--driver-mode=cl", тож обгортка-скрипт під іменем clang-cl працює
+      # без встановлення окремого LLVM.
       - name: Install zig (cargo-zigbuild couldn't auto-download it here)
-        if: matrix.builder == 'zigbuild'
+        if: matrix.builder == 'zigbuild' || matrix.builder == 'xwin'
         run: |
           ZIG_DIR="$GITHUB_WORKSPACE/.zig"
           mkdir -p "$ZIG_DIR" /tmp/zig-extract
@@ -139,6 +146,19 @@ jobs:
       - name: Install cargo-xwin (no apt/root needed)
         if: matrix.builder == 'xwin'
         run: cargo install cargo-xwin --locked
+
+      # cc-rs шукає компілятор рівно на імʼя "clang-cl" в PATH для msvc-таргету
+      # (без явного CC-override) — обгортки перенаправляють на zig-овий clang
+      # через "--driver-mode=cl" (сам clang-прапор, не наш винахід).
+      # "zig lld-link" — вбудована persona Zig-ового lld для MSVC-стилю лінковки.
+      - name: Set up clang-cl/lld-link via Zig (cargo-xwin has no C compiler on this image)
+        if: matrix.builder == 'xwin'
+        run: |
+          ZIG_DIR="$GITHUB_WORKSPACE/.zig"
+          printf '#!/bin/sh\nexec "%s/zig" cc --driver-mode=cl "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl"
+          printf '#!/bin/sh\nexec "%s/zig" c++ --driver-mode=cl "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/clang-cl++"
+          printf '#!/bin/sh\nexec "%s/zig" lld-link "$@"\n' "$ZIG_DIR" > "$ZIG_DIR/lld-link"
+          chmod +x "$ZIG_DIR/clang-cl" "$ZIG_DIR/clang-cl++" "$ZIG_DIR/lld-link"
 
       - name: Build (cargo-zigbuild — musl/Apple)
         if: matrix.builder == 'zigbuild'
