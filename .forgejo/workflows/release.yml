@@ -6,11 +6,17 @@ name: Release g
 # (g-<target>) — бінарник називається `g` (скорочено від git), package/crate — n7n-g.
 #
 # Усі 4 таргети кросскомпілюються на ОДНОМУ self-hosted Linux-раннері (немає
-# зареєстрованого macOS/Windows-раннера) через cargo-zigbuild: Zig несе власні
-# мінімальні сисроти для musl, mingw-w64 (Windows) і навіть Apple libSystem-заглушки
-# (macOS) — без osxcross/Apple SDK (ліцензійна проблема, якої уникаємо) і без
-# Docker-in-docker. Компроміс на macOS: без code signing/notarization (Gatekeeper
-# попередить при першому запуску) — прийнятно, доки немає реального Mac-раннера.
+# зареєстрованого macOS/Windows-раннера) — двома різними інструментами залежно
+# від таргету (matrix.builder):
+# - zigbuild (musl, обидва macOS): cargo-zigbuild + Zig несе власні мінімальні
+#   сисроти (musl, Apple libSystem-заглушки) — без osxcross/Apple SDK (ліцензійна
+#   проблема, якої уникаємо). Компроміс на macOS: без code signing/notarization
+#   (Gatekeeper попередить при першому запуску).
+# - xwin (Windows): cargo-xwin замість cargo-zigbuild — windows-gnu відкинуто
+#   через upstream-баг у aws-lc-sys (vendored jitterentropy тягне POSIX-only
+#   sched.h на будь-якому не-msvc таргеті, спостережено 2026-08-17). msvc-таргет
+#   легально отримує офіційний MS SDK/CRT через xwin (Microsoft дозволяє це для
+#   крос-компіляції, на відміну від Apple).
 
 on:
   push:
@@ -36,15 +42,29 @@ jobs:
           - target: x86_64-unknown-linux-musl
             asset: g-x86_64-unknown-linux-musl
             bin_name: g
-          - target: x86_64-pc-windows-gnu
-            asset: g-x86_64-pc-windows-gnu.exe
+            builder: zigbuild
+          # windows-gnu відкинуто: aws-lc-sys (crypto rustls) несе vendored
+          # jitterentropy-library, чий build.rs вирішує "компілювати чи ні" за
+          # target_env замість target_os — на gnu безумовно тягне POSIX-only
+          # <sched.h>, якого немає в MinGW ("fatal error: 'sched.h' file not
+          # found", спостережено 2026-08-17; той самий баг вилазить і на
+          # реальному Windows з GNU/MinGW-тулчейном, це не наслідок Zig-кросу).
+          # На msvc-таргеті aws-lc-sys вважає себе не-POSIX і пропускає
+          # jitterentropy — баг просто не спрацьовує. cargo-xwin легально тягне
+          # офіційний MS SDK/CRT (на відміну від Apple SDK — MS дозволяє це для
+          # крос-компіляції, звідси й існування xwin/cargo-xwin).
+          - target: x86_64-pc-windows-msvc
+            asset: g-x86_64-pc-windows-msvc.exe
             bin_name: g.exe
+            builder: xwin
           - target: aarch64-apple-darwin
             asset: g-aarch64-apple-darwin
             bin_name: g
+            builder: zigbuild
           - target: x86_64-apple-darwin
             asset: g-x86_64-apple-darwin
             bin_name: g
+            builder: zigbuild
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +94,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          # cargo-xwin лінкує через rust-lld (частина llvm-tools) замість
+          # системного linker — потрібен окремий rustup-компонент лише для msvc-ноги.
+          components: ${{ matrix.builder == 'xwin' && 'llvm-tools' || '' }}
 
       # apt виявився непрацездатним і на tauri-образі ("Permission denied" на
       # /var/lib/apt/lists, той самий дефект, що на інших варіантах — 2026-08-16).
@@ -83,14 +106,16 @@ jobs:
       # "-C link-self-contained=-crto" виявився unstable-опцією на stable-каналі
       # ("only y/yes/on/n/no/off/-linker are stable", спостережено 2026-08-16).
       # cargo-zigbuild — призначений саме для цього сценарію (Rust + zig-cc +
-      # musl), сам знає правильні лінкер-прапори — надійніше за власний wrapper.
-      # Автозавантаження zig у ньому не спрацювало на цьому образі ("Failed to
-      # find zig", спостережено 2026-08-16) — довантажуємо zig самі (curl+tar,
-      # python3-lzma фолбек, як і раніше) й кладемо на PATH.
+      # musl/apple), сам знає правильні лінкер-прапори — надійніше за власний
+      # wrapper. Автозавантаження zig у ньому не спрацювало на цьому образі
+      # ("Failed to find zig", спостережено 2026-08-16) — довантажуємо zig самі
+      # (curl+tar, python3-lzma фолбек) й кладемо на PATH.
       - name: Install cargo-zigbuild (no apt/root needed)
+        if: matrix.builder == 'zigbuild'
         run: cargo install cargo-zigbuild --locked
 
       - name: Install zig (cargo-zigbuild couldn't auto-download it here)
+        if: matrix.builder == 'zigbuild'
         run: |
           ZIG_DIR="$GITHUB_WORKSPACE/.zig"
           mkdir -p "$ZIG_DIR" /tmp/zig-extract
@@ -109,8 +134,19 @@ jobs:
           cp -r /tmp/zig-extract/. "$ZIG_DIR/"
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      - name: Build
+      # cargo-xwin сам довантажує офіційний MS SDK/CRT (через "xwin", легально —
+      # на відміну від Apple SDK) при першому запуску, кешує в CARGO_HOME.
+      - name: Install cargo-xwin (no apt/root needed)
+        if: matrix.builder == 'xwin'
+        run: cargo install cargo-xwin --locked
+
+      - name: Build (cargo-zigbuild — musl/Apple)
+        if: matrix.builder == 'zigbuild'
         run: cargo zigbuild --release --target ${{ matrix.target }} --bin g
+
+      - name: Build (cargo-xwin — Windows MSVC)
+        if: matrix.builder == 'xwin'
+        run: cargo xwin build --release --target ${{ matrix.target }} --bin g
 
       - name: Stage binary
         run: |

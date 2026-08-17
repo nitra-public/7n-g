@@ -1,6 +1,6 @@
 [package]
 name = "n7n-g"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "g — git-дельта CLI (getw/pull/push/ch): перенесення worktree-дельт з багаторівневим авторезолвом конфліктів"
 license = "ISC"
