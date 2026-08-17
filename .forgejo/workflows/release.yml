@@ -5,11 +5,12 @@ name: Release g
 # 7n/homebrew. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі asset-імена
 # (g-<target>) — бінарник називається `g` (скорочено від git), package/crate — n7n-g.
 #
-# Лише x86_64-unknown-linux-musl наразі: self-hosted Forgejo runner на git.7n.ai не має
-# зареєстрованого macOS-раннера (перевірено 2026-08-16), а cross-compile на macOS з
-# Linux потребує osxcross + витягнутий Apple SDK (ліцензійно не дистриб'юється
-# відкрито) — не робимо це наспіх. aarch64-apple-darwin — окрема задача, коли зʼявиться
-# або реальний Mac-раннер, або належно підготовлений osxcross-образ.
+# Усі 4 таргети кросскомпілюються на ОДНОМУ self-hosted Linux-раннері (немає
+# зареєстрованого macOS/Windows-раннера) через cargo-zigbuild: Zig несе власні
+# мінімальні сисроти для musl, mingw-w64 (Windows) і навіть Apple libSystem-заглушки
+# (macOS) — без osxcross/Apple SDK (ліцензійна проблема, якої уникаємо) і без
+# Docker-in-docker. Компроміс на macOS: без code signing/notarization (Gatekeeper
+# попередить при першому запуску) — прийнятно, доки немає реального Mac-раннера.
 
 on:
   push:
@@ -28,6 +29,22 @@ jobs:
     # конкретного варіанту, спостережено 2026-08-16). "tauri" — окремий, повноцінно
     # оснащений runner (Tauri-збірки вимагають повний C-тулчейн) — пробуємо його.
     runs-on: tauri
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            asset: g-x86_64-unknown-linux-musl
+            bin_name: g
+          - target: x86_64-pc-windows-gnu
+            asset: g-x86_64-pc-windows-gnu.exe
+            bin_name: g.exe
+          - target: aarch64-apple-darwin
+            asset: g-aarch64-apple-darwin
+            bin_name: g
+          - target: x86_64-apple-darwin
+            asset: g-x86_64-apple-darwin
+            bin_name: g
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +73,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       # apt виявився непрацездатним і на tauri-образі ("Permission denied" на
       # /var/lib/apt/lists, той самий дефект, що на інших варіантах — 2026-08-16).
@@ -93,21 +110,21 @@ jobs:
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
       - name: Build
-        run: cargo zigbuild --release --target x86_64-unknown-linux-musl --bin g
+        run: cargo zigbuild --release --target ${{ matrix.target }} --bin g
 
       - name: Stage binary
         run: |
           mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/g dist/g-x86_64-unknown-linux-musl
-          chmod +x dist/g-x86_64-unknown-linux-musl
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "dist/${{ matrix.asset }}"
+          chmod +x "dist/${{ matrix.asset }}"
 
       # v4+ (@actions/artifact v2+ протокол) не підтримується на Forgejo/GHES-сумісних
       # runner'ах ("GHESNotSupportedError", спостережено 2026-08-16, ПІСЛЯ успішного
       # білду — це вже не build-помилка). v3 сумісний.
       - uses: actions/upload-artifact@v3
         with:
-          name: g-x86_64-unknown-linux-musl
-          path: dist/g-x86_64-unknown-linux-musl
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
   release:
@@ -118,10 +135,12 @@ jobs:
         with:
           path: dist
 
+      # download-artifact@v3 без "name" кладе кожен матричний артефакт у власну
+      # підтеку dist/<asset>/<asset> — збираємо всі 4 в один плаский release/.
       - name: Flatten artifact layout
         run: |
           mkdir -p release
-          cp dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl release/
+          find dist -type f -exec cp {} release/ \;
 
       # Forgejo не має власного `gh`-аналога, преінстальованого на runners — реліз і
       # asset-upload через REST API (Gitea-сумісний, той самий у Forgejo). NB:
@@ -155,11 +174,13 @@ jobs:
         with:
           path: dist
 
-      - name: Compute version and checksum
+      - name: Compute version and checksums
         id: meta
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "sha_linux_x64=$(sha256sum dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_macos_arm64=$(sha256sum dist/g-aarch64-apple-darwin/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_macos_x64=$(sha256sum dist/g-x86_64-apple-darwin/g-x86_64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout 7n/homebrew
         uses: actions/checkout@v4
@@ -172,6 +193,8 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
+          SHA_MACOS_ARM64: ${{ steps.meta.outputs.sha_macos_arm64 }}
+          SHA_MACOS_X64: ${{ steps.meta.outputs.sha_macos_x64 }}
           TAG: ${{ github.ref_name }}
         run: |
           cat > tap/Formula/g.rb <<EOF
@@ -181,8 +204,25 @@ jobs:
             version "${VERSION}"
             license "ISC"
 
+            # macOS-асети зібрано кросскомпіляцією через cargo-zigbuild (без
+            # реального Mac-раннера) — без code signing/notarization, тож
+            # Gatekeeper попередить при першому запуску.
             on_macos do
-              odie "g: macOS-збірка ще не публікується (немає macOS-раннера в CI) — постав через 'cargo install n7n-g' або 'cargo binstall n7n-g' з локальною компіляцією."
+              if Hardware::CPU.arm?
+                url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-aarch64-apple-darwin"
+                sha256 "${SHA_MACOS_ARM64}"
+
+                def install
+                  bin.install "g-aarch64-apple-darwin" => "g"
+                end
+              else
+                url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-x86_64-apple-darwin"
+                sha256 "${SHA_MACOS_X64}"
+
+                def install
+                  bin.install "g-x86_64-apple-darwin" => "g"
+                end
+              end
             end
 
             on_linux do
