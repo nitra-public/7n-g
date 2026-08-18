@@ -70,6 +70,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Тимчасова діагностика: actions/cache@v4/v6 мовчки no-opляться саме на
+      # tauri-раннері з "GHES version >= 3.5" (спостережено 2026-08-18) —
+      # конфіг раннера (cache.actions_cache_url_override) не label-специфічний,
+      # тож перевіряємо, чи ACTIONS_CACHE_URL взагалі проставлений і доступний
+      # ЗСЕРЕДИНИ реального job-контейнера на цьому образі.
+      - name: DEBUG cache env/reachability
+        run: |
+          echo "ACTIONS_CACHE_URL=${ACTIONS_CACHE_URL:-<unset>}"
+          echo "ACTIONS_RUNTIME_URL=${ACTIONS_RUNTIME_URL:-<unset>}"
+          echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-<unset>}"
+          if [ -n "${ACTIONS_CACHE_URL:-}" ]; then
+            curl -sv -m 5 "$ACTIONS_CACHE_URL" 2>&1 | head -20 || true
+          fi
+
       # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
       # self-hosted runner-образу з несумісними дефектами — одні без curl, одні без
       # writable $HOME, і невідомо заздалегідь, чи є sudo (є не на всіх). $SUDO —
@@ -140,14 +154,16 @@ jobs:
       # SDK/CRT через xwin разом займали ~20+ хв на кожному прогоні — жоден
       # з трьох не залежить від нашого коду, лише від пінованих версій
       # (LLVM 19.1.0 / cargo-xwin 0.23.1), тож кешуємо всі три одним ключем.
-      # actions/cache@v6 сам перевіряє "GHES version >= 3.5" і мовчки НІЧОГО
-      # не робить (ні restore, ні save), якщо перевірка не проходить — саме
-      # так і сталось (spостережено 2026-08-18, "Cache action is only
-      # supported on GHES version >= 3.5" у логах, при тому що cache-сервер
-      # реально підключений). v4 не має цієї GHES-перевірки.
+      # actions/cache@v6 І v4 ОБИДВІ мовчки нічого не роблять (ні restore, ні
+      # save) — обидві намагаються спершу новіший "twirp v2" cache-протокол
+      # (GHES >= 3.5), якого self-hosted cache-сервер тут, судячи з усього,
+      # не підтримує ("Cache action is only supported on GHES version >= 3.5"
+      # в логах ОБОХ версій, спостережено 2026-08-18, хоча cache-сервер
+      # реально підключений). v3 використовує старіший REST cache-протокол
+      # без цієї перевірки.
       - name: Cache LLVM/cargo-xwin/xwin SDK
         if: matrix.builder == 'xwin'
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: |
             ${{ github.workspace }}/.llvm
