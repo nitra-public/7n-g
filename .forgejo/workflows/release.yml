@@ -136,11 +136,28 @@ jobs:
           cp -r /tmp/zig-extract/. "$ZIG_DIR/"
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
+      # LLVM-реліз (~1.6GB) + компіляція cargo-xwin з нуля + довантаження MS
+      # SDK/CRT через xwin разом займали ~20+ хв на кожному прогоні — жоден
+      # з трьох не залежить від нашого коду, лише від пінованих версій
+      # (LLVM 19.1.0 / cargo-xwin 0.23.1), тож кешуємо всі три одним ключем.
+      - name: Cache LLVM/cargo-xwin/xwin SDK
+        if: matrix.builder == 'xwin'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ github.workspace }}/.llvm
+            ${{ github.workspace }}/.cargo/bin/cargo-xwin
+            ${{ github.workspace }}/.home/.cache/cargo-xwin
+          key: xwin-toolchain-llvm19.1.0-cargoxwin0.23.1-v1
+
       # cargo-xwin сам довантажує офіційний MS SDK/CRT (через "xwin", легально —
       # на відміну від Apple SDK) при першому запуску, кешує в CARGO_HOME.
+      # Пінуємо версію явно — і для відтворюваності, і бо кеш-ключ вище її
+      # називає буквально (кеш і версія мають рухатись разом).
       - name: Install cargo-xwin (no apt/root needed)
         if: matrix.builder == 'xwin'
-        run: cargo install cargo-xwin --locked
+        run: |
+          test -x "$CARGO_HOME/bin/cargo-xwin" || cargo install cargo-xwin --version 0.23.1 --locked
 
       # "zig cc --driver-mode=cl" виявився глухим кутом: zig-овий "cc" завжди
       # інжектить власні hardening-прапори (-fstack-protector-strong, --param
@@ -154,10 +171,11 @@ jobs:
         if: matrix.builder == 'xwin'
         run: |
           LLVM_DIR="$GITHUB_WORKSPACE/.llvm"
-          mkdir -p "$LLVM_DIR" /tmp/llvm-extract
-          curl -fsSL -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/LLVM-19.1.0-Linux-X64.tar.xz
-          if ! tar -xf /tmp/llvm.tar.xz -C /tmp/llvm-extract --strip-components=1 2>/dev/null; then
-            python3 - <<'PYEOF'
+          if [ ! -x "$LLVM_DIR/bin/clang-cl" ]; then
+            mkdir -p "$LLVM_DIR" /tmp/llvm-extract
+            curl -fsSL -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/LLVM-19.1.0-Linux-X64.tar.xz
+            if ! tar -xf /tmp/llvm.tar.xz -C /tmp/llvm-extract --strip-components=1 2>/dev/null; then
+              python3 - <<'PYEOF'
           import lzma, os, shutil, tarfile
 
           with lzma.open("/tmp/llvm.tar.xz") as f, tarfile.open(fileobj=f) as tar:
@@ -166,8 +184,9 @@ jobs:
           for name in os.listdir(os.path.join("/tmp/llvm-raw", top)):
               shutil.move(os.path.join("/tmp/llvm-raw", top, name), "/tmp/llvm-extract")
           PYEOF
+            fi
+            cp -r /tmp/llvm-extract/. "$LLVM_DIR/"
           fi
-          cp -r /tmp/llvm-extract/. "$LLVM_DIR/"
           echo "$LLVM_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Build (cargo-zigbuild — musl/Apple)
