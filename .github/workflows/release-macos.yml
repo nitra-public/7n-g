@@ -124,28 +124,28 @@ jobs:
           tag = os.environ["TAG"]
 
           skeleton = '''class G < Formula
-  desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
-  homepage "https://git.7n.ai/7n/g"
-  version "0.0.0"
-  license "ISC"
+            desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
+            homepage "https://git.7n.ai/7n/g"
+            version "0.0.0"
+            license "ISC"
 
-  # BEGIN_MACOS
-  on_macos do
-    odie "g: macOS build not yet published for this version"
-  end
-  # END_MACOS
+            # BEGIN_MACOS
+            on_macos do
+              odie "g: macOS build not yet published for this version"
+            end
+            # END_MACOS
 
-  # BEGIN_LINUX
-  on_linux do
-    odie "g: Linux build not yet published for this version"
-  end
-  # END_LINUX
+            # BEGIN_LINUX
+            on_linux do
+              odie "g: Linux build not yet published for this version"
+            end
+            # END_LINUX
 
-  test do
-    system "#{bin}/g", "--help"
-  end
-end
-'''
+            test do
+              system "#{bin}/g", "--help"
+            end
+          end
+          '''
 
           os.makedirs(os.path.dirname(path), exist_ok=True)
           if not os.path.exists(path):
@@ -158,19 +158,19 @@ end
           content = re.sub(r'version "[^"]*"', 'version "%s"' % version, content, count=1)
 
           macos_block = '''  # BEGIN_MACOS
-  on_macos do
-    if Hardware::CPU.arm?
-      url "https://git.7n.ai/7n/g/releases/download/%s/g-aarch64-apple-darwin"
-      sha256 "%s"
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://git.7n.ai/7n/g/releases/download/%s/g-aarch64-apple-darwin"
+                sha256 "%s"
 
-      def install
-        bin.install "g-aarch64-apple-darwin" => "g"
-      end
-    else
-      odie "g: x86_64 macOS ще не підтримується (немає x86_64-apple-darwin ассету)"
-    end
-  end
-  # END_MACOS''' % (tag, sha)
+                def install
+                  bin.install "g-aarch64-apple-darwin" => "g"
+                end
+              else
+                odie "g: x86_64 macOS ще не підтримується (немає x86_64-apple-darwin ассету)"
+              end
+            end
+            # END_MACOS''' % (tag, sha)
 
           content = re.sub(r'[ \t]*# BEGIN_MACOS.*?# END_MACOS', macos_block, content, count=1, flags=re.DOTALL)
 
