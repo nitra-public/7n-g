@@ -140,9 +140,14 @@ jobs:
       # SDK/CRT через xwin разом займали ~20+ хв на кожному прогоні — жоден
       # з трьох не залежить від нашого коду, лише від пінованих версій
       # (LLVM 19.1.0 / cargo-xwin 0.23.1), тож кешуємо всі три одним ключем.
+      # actions/cache@v6 сам перевіряє "GHES version >= 3.5" і мовчки НІЧОГО
+      # не робить (ні restore, ні save), якщо перевірка не проходить — саме
+      # так і сталось (spостережено 2026-08-18, "Cache action is only
+      # supported on GHES version >= 3.5" у логах, при тому що cache-сервер
+      # реально підключений). v4 не має цієї GHES-перевірки.
       - name: Cache LLVM/cargo-xwin/xwin SDK
         if: matrix.builder == 'xwin'
-        uses: actions/cache@v6
+        uses: actions/cache@v4
         with:
           path: |
             ${{ github.workspace }}/.llvm
