@@ -278,7 +278,12 @@ jobs:
           set -euo pipefail
           FORMULA="tap/Formula/g.rb"
 
-          if [ ! -f "$FORMULA" ]; then
+          # "не існує" САМ ПО СОБІ недостатній — старіший формат файлу (до
+          # BEGIN/END-маркерів) вже існував у 7n/homebrew і не мав маркерів
+          # взагалі, тож grep-перевірка теж потрібна (без неї sed оновлював
+          # version, а awk-заміна секції тихо не спрацьовувала — застарілі
+          # url/sha256 лишались назавжди, спостережено 2026-08-18).
+          if [ ! -f "$FORMULA" ] || ! grep -q '# BEGIN_LINUX' "$FORMULA"; then
             mkdir -p "$(dirname "$FORMULA")"
             cat > "$FORMULA" <<'RUBYEOF'
           class G < Formula

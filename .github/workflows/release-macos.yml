@@ -147,8 +147,16 @@ jobs:
           end
           '''
 
+          # "не існує" САМ ПО СОБІ недостатній — старіший формат файлу (до
+          # BEGIN/END-маркерів) вже існував у 7n/homebrew без маркерів
+          # взагалі, тож regex-заміна секції тихо не спрацьовувала
+          # (спостережено 2026-08-18, той самий баг на Forgejo-стороні).
           os.makedirs(os.path.dirname(path), exist_ok=True)
-          if not os.path.exists(path):
+          needs_skeleton = not os.path.exists(path)
+          if not needs_skeleton:
+              with open(path) as f:
+                  needs_skeleton = "# BEGIN_MACOS" not in f.read()
+          if needs_skeleton:
               with open(path, "w") as f:
                   f.write(skeleton)
 
