@@ -1,0 +1,190 @@
+name: Release g (macOS)
+
+# Цей репозиторій — push-mirror з git.7n.ai/7n/g (sync_on_commit) у
+# nitra-public/7n-g, ЛИШЕ щоб мати доступ до реального GitHub-раннера
+# macos-14 (немає macOS-раннера на self-hosted git.7n.ai). Linux/Windows
+# збираються на git.7n.ai/.forgejo/workflows/release.yml — цей workflow
+# лише додає macOS-асет у ТОЙ САМИЙ git.7n.ai-реліз і патчить лише секцію
+# on_macos у Formula/g.rb (git.7n.ai/7n/homebrew), не чіпаючи on_linux.
+#
+# FJ_TOKEN — git.7n.ai personal access token (write:repository), потрібен
+# для створення/апдейту релізу в 7n/g і push у 7n/homebrew — за тим самим
+# принципом, що й HOMEBREW_TAP_PAT на боці Forgejo.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build-macos:
+    runs-on: macos-14 # native Apple Silicon — без крос-компіляції
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin --bin g
+
+      - name: Stage binary
+        run: |
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/g dist/g-aarch64-apple-darwin
+          chmod +x dist/g-aarch64-apple-darwin
+
+      # Forgejo-пайплайн (linux+windows) тригериться тим самим tag push і
+      # може ще не встигнути створити реліз — чекаємо появи (до ~20 хв,
+      # той самий діапазон, що й linux+windows білд там).
+      - name: Wait for git.7n.ai release to exist
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          API: https://git.7n.ai/api/v1
+          REPO: 7n/g
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_id=""
+          for i in $(seq 1 40); do
+            found=$(curl -fsS "$API/repos/$REPO/releases/tags/$TAG" \
+              -H "Authorization: token $TOKEN" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*' || true)
+            if [ -n "$found" ]; then
+              release_id="$found"
+              break
+            fi
+            echo "waiting for release (attempt $i)..."
+            sleep 30
+          done
+          echo "release_id=$release_id" >> "$GITHUB_ENV"
+
+      # Якщо Forgejo-пайплайн так і не встиг за час очікування — створюємо
+      # реліз самі (ідемпотентно, той самий підхід що й на боці Forgejo).
+      - name: Create release if still missing
+        if: env.release_id == ''
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          API: https://git.7n.ai/api/v1
+          REPO: 7n/g
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_id=$(curl -fsS -X POST "$API/repos/$REPO/releases" \
+            -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+          echo "release_id=$release_id" >> "$GITHUB_ENV"
+
+      - name: Upload macOS asset to git.7n.ai release
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          API: https://git.7n.ai/api/v1
+          REPO: 7n/g
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=g-aarch64-apple-darwin" \
+            -H "Authorization: token $TOKEN" -F "attachment=@dist/g-aarch64-apple-darwin"
+
+      - name: Compute version and checksum
+        id: meta
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "sha_macos_arm64=$(shasum -a 256 dist/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Патчить ЛИШЕ секцію on_macos за BEGIN_MACOS/END_MACOS-маркерами, не
+      # чіпаючи on_linux — той пише git.7n.ai/.forgejo/workflows/release.yml,
+      # незалежно й у довільному порядку щодо цього job. Той самий skeleton,
+      # що й на боці Forgejo (створюється, якщо файл ще не існує).
+      #
+      # actions/checkout не вміє в довільний git-хост (лише github.com/GHES),
+      # тож клонуємо git.7n.ai вручну через http.extraheader (токен не
+      # потрапляє в URL/git-логи).
+      - name: Update Homebrew formula (on_macos section only)
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA_MACOS_ARM64: ${{ steps.meta.outputs.sha_macos_arm64 }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          rm -rf tap
+          git -c http.extraheader="Authorization: token ${TOKEN}" clone https://git.7n.ai/7n/homebrew.git tap
+          cd tap
+          git config "http.https://git.7n.ai/.extraheader" "Authorization: token ${TOKEN}"
+          cd ..
+
+          python3 - <<'PYEOF'
+          import os
+          import re
+
+          path = "tap/Formula/g.rb"
+          version = os.environ["VERSION"]
+          sha = os.environ["SHA_MACOS_ARM64"]
+          tag = os.environ["TAG"]
+
+          skeleton = '''class G < Formula
+  desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
+  homepage "https://git.7n.ai/7n/g"
+  version "0.0.0"
+  license "ISC"
+
+  # BEGIN_MACOS
+  on_macos do
+    odie "g: macOS build not yet published for this version"
+  end
+  # END_MACOS
+
+  # BEGIN_LINUX
+  on_linux do
+    odie "g: Linux build not yet published for this version"
+  end
+  # END_LINUX
+
+  test do
+    system "#{bin}/g", "--help"
+  end
+end
+'''
+
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          if not os.path.exists(path):
+              with open(path, "w") as f:
+                  f.write(skeleton)
+
+          with open(path) as f:
+              content = f.read()
+
+          content = re.sub(r'version "[^"]*"', 'version "%s"' % version, content, count=1)
+
+          macos_block = '''  # BEGIN_MACOS
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://git.7n.ai/7n/g/releases/download/%s/g-aarch64-apple-darwin"
+      sha256 "%s"
+
+      def install
+        bin.install "g-aarch64-apple-darwin" => "g"
+      end
+    else
+      odie "g: x86_64 macOS ще не підтримується (немає x86_64-apple-darwin ассету)"
+    end
+  end
+  # END_MACOS''' % (tag, sha)
+
+          content = re.sub(r'[ \t]*# BEGIN_MACOS.*?# END_MACOS', macos_block, content, count=1, flags=re.DOTALL)
+
+          with open(path, "w") as f:
+              f.write(content)
+          PYEOF
+
+          cd tap
+          git config user.name "github-actions-macos"
+          git config user.email "github-actions@git.7n.ai"
+          git add Formula/g.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git commit -m "g ${VERSION} (macOS)"
+          git push
