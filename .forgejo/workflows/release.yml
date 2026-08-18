@@ -266,23 +266,22 @@ jobs:
       # чіпаючи on_macos — той пише окремий GitHub Actions workflow
       # (nitra-public/7n-g, macos-14), незалежно й у довільному порядку щодо
       # цього job. Якщо файл ще не існує (перший реліз), створюємо skeleton
-      # з обома секціями як odie-заглушки.
+      # з обома секціями як odie-заглушки. Чистий sed/awk, без python3 —
+      # частина варіантів self-hosted "ubuntu-latest"-образу його не мають
+      # ("python3: command not found", спостережено 2026-08-18).
       - name: Update formula (on_linux section only)
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
           TAG: ${{ github.ref_name }}
         run: |
-          python3 - <<'PYEOF'
-          import os
-          import re
+          set -euo pipefail
+          FORMULA="tap/Formula/g.rb"
 
-          path = "tap/Formula/g.rb"
-          version = os.environ["VERSION"]
-          sha = os.environ["SHA_LINUX"]
-          tag = os.environ["TAG"]
-
-          skeleton = '''class G < Formula
+          if [ ! -f "$FORMULA" ]; then
+            mkdir -p "$(dirname "$FORMULA")"
+            cat > "$FORMULA" <<'RUBYEOF'
+          class G < Formula
             desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
             homepage "https://git.7n.ai/7n/g"
             version "0.0.0"
@@ -304,34 +303,30 @@ jobs:
               system "#{bin}/g", "--help"
             end
           end
-          '''
+          RUBYEOF
+          fi
 
-          os.makedirs(os.path.dirname(path), exist_ok=True)
-          if not os.path.exists(path):
-              with open(path, "w") as f:
-                  f.write(skeleton)
+          sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" "$FORMULA" && rm -f "$FORMULA.bak"
 
-          with open(path) as f:
-              content = f.read()
-
-          content = re.sub(r'version "[^"]*"', 'version "%s"' % version, content, count=1)
-
-          linux_block = '''  # BEGIN_LINUX
-            on_linux do
-              url "https://git.7n.ai/7n/g/releases/download/%s/g-x86_64-unknown-linux-musl"
-              sha256 "%s"
-
-              def install
-                bin.install "g-x86_64-unknown-linux-musl" => "g"
-              end
-            end
-            # END_LINUX''' % (tag, sha)
-
-          content = re.sub(r'[ \t]*# BEGIN_LINUX.*?# END_LINUX', linux_block, content, count=1, flags=re.DOTALL)
-
-          with open(path, "w") as f:
-              f.write(content)
-          PYEOF
+          awk -v tag="$TAG" -v sha="$SHA_LINUX" '
+            /# BEGIN_LINUX/ {
+              print "  # BEGIN_LINUX"
+              print "  on_linux do"
+              print "    url \"https://git.7n.ai/7n/g/releases/download/" tag "/g-x86_64-unknown-linux-musl\""
+              print "    sha256 \"" sha "\""
+              print ""
+              print "    def install"
+              print "      bin.install \"g-x86_64-unknown-linux-musl\" => \"g\""
+              print "    end"
+              print "  end"
+              print "  # END_LINUX"
+              skip=1
+              next
+            }
+            /# END_LINUX/ { skip=0; next }
+            skip { next }
+            { print }
+          ' "$FORMULA" > "$FORMULA.tmp" && mv "$FORMULA.tmp" "$FORMULA"
 
       - name: Commit and push
         working-directory: tap
