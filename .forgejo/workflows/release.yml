@@ -5,18 +5,28 @@ name: Release g
 # 7n/homebrew. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі asset-імена
 # (g-<target>) — бінарник називається `g` (скорочено від git), package/crate — n7n-g.
 #
-# Усі 4 таргети кросскомпілюються на ОДНОМУ self-hosted Linux-раннері (немає
-# зареєстрованого macOS/Windows-раннера) — двома різними інструментами залежно
-# від таргету (matrix.builder):
-# - zigbuild (musl, обидва macOS): cargo-zigbuild + Zig несе власні мінімальні
-#   сисроти (musl, Apple libSystem-заглушки) — без osxcross/Apple SDK (ліцензійна
-#   проблема, якої уникаємо). Компроміс на macOS: без code signing/notarization
-#   (Gatekeeper попередить при першому запуску).
+# Linux+Windows кросскомпілюються на self-hosted Linux-раннері (двома різними
+# інструментами залежно від таргету, matrix.builder):
+# - zigbuild (musl): cargo-zigbuild + Zig несе власний мінімальний musl-сисрут.
 # - xwin (Windows): cargo-xwin замість cargo-zigbuild — windows-gnu відкинуто
 #   через upstream-баг у aws-lc-sys (vendored jitterentropy тягне POSIX-only
 #   sched.h на будь-якому не-msvc таргеті, спостережено 2026-08-17). msvc-таргет
 #   легально отримує офіційний MS SDK/CRT через xwin (Microsoft дозволяє це для
-#   крос-компіляції, на відміну від Apple).
+#   крос-компіляції, на відміну від Apple). Zig-емуляція clang-cl теж
+#   відкинута (структурний баг: hardening-прапори Zig несумісні з cl-режимом) —
+#   лінкуємо через довантажений СПРАВЖНІЙ LLVM-реліз.
+#
+# macOS (aarch64-apple-darwin) НЕ будується тут — немає macOS-раннера на
+# git.7n.ai, а cargo-zigbuild впирається у aws-lc-sys, якому потрібен реальний
+# Apple SDK (CoreServices.h), недоступний через Zig-заглушки. Замість цього
+# macOS будується на GitHub Actions macos-14 (реальний Mac, нативно, без
+# крос-компіляції) — окремий workflow nitra-public/7n-g:
+# .github/workflows/release-macos.yml (mirror цього репо, sync_on_commit).
+# Той GH workflow вивантажує macOS-асет у ЦЕЙ САМИЙ git.7n.ai-реліз і патчить
+# лише секцію on_macos у Formula/g.rb (git.7n.ai/7n/homebrew) — не чіпаючи
+# on_linux, який пише цей workflow. Обидва пайплайни ідемпотентні щодо
+# порядку виконання (кожен створює skeleton-файл, якщо відсутній, і патчить
+# лише свою секцію за BEGIN/END-маркерами).
 
 on:
   push:
@@ -57,14 +67,6 @@ jobs:
             asset: g-x86_64-pc-windows-msvc.exe
             bin_name: g.exe
             builder: xwin
-          - target: aarch64-apple-darwin
-            asset: g-aarch64-apple-darwin
-            bin_name: g
-            builder: zigbuild
-          - target: x86_64-apple-darwin
-            asset: g-x86_64-apple-darwin
-            bin_name: g
-            builder: zigbuild
     steps:
       - uses: actions/checkout@v4
 
@@ -212,6 +214,9 @@ jobs:
       # як repo variable (назва без префікса FORGEJO_ — той зарезервований платформою,
       # POST .../actions/variables/FORGEJO_API_URL повертає "invalid secret name",
       # перевірено 2026-08-16).
+      # Ідемпотентно: реліз для цього тегу міг уже існувати (напр. GitHub-side
+      # macOS-workflow встиг створити його першим — обидва тригеряться тим
+      # самим tag push, порядок не гарантований).
       - name: Create Forgejo Release + upload assets
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -222,9 +227,15 @@ jobs:
           set -euo pipefail
           # jq відсутній на цьому runner-образі ("command not found", спостережено
           # 2026-08-16) — відповідь плоска ({"id":N,...}), витягуємо без jq.
-          release_id=$(curl -fsS -X POST "$API/repos/$REPO/releases" \
-            -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-            -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+          existing=$(curl -fsS "$API/repos/$REPO/releases/tags/$TAG" \
+            -H "Authorization: token $TOKEN" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*' || true)
+          if [ -n "$existing" ]; then
+            release_id="$existing"
+          else
+            release_id=$(curl -fsS -X POST "$API/repos/$REPO/releases" \
+              -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+          fi
           for f in release/*; do
             curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=$(basename "$f")" \
               -H "Authorization: token $TOKEN" -F "attachment=@$f"
@@ -238,13 +249,11 @@ jobs:
         with:
           path: dist
 
-      - name: Compute version and checksums
+      - name: Compute version and checksum
         id: meta
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "sha_linux_x64=$(sha256sum dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha_macos_arm64=$(sha256sum dist/g-aarch64-apple-darwin/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha_macos_x64=$(sha256sum dist/g-x86_64-apple-darwin/g-x86_64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout 7n/homebrew
         uses: actions/checkout@v4
@@ -253,56 +262,76 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_PAT }}
           path: tap
 
-      - name: Update formula
+      # Патчить ЛИШЕ секцію on_linux за BEGIN_LINUX/END_LINUX-маркерами, не
+      # чіпаючи on_macos — той пише окремий GitHub Actions workflow
+      # (nitra-public/7n-g, macos-14), незалежно й у довільному порядку щодо
+      # цього job. Якщо файл ще не існує (перший реліз), створюємо skeleton
+      # з обома секціями як odie-заглушки.
+      - name: Update formula (on_linux section only)
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
-          SHA_MACOS_ARM64: ${{ steps.meta.outputs.sha_macos_arm64 }}
-          SHA_MACOS_X64: ${{ steps.meta.outputs.sha_macos_x64 }}
           TAG: ${{ github.ref_name }}
         run: |
-          cat > tap/Formula/g.rb <<EOF
-          class G < Formula
+          python3 - <<'PYEOF'
+          import os
+          import re
+
+          path = "tap/Formula/g.rb"
+          version = os.environ["VERSION"]
+          sha = os.environ["SHA_LINUX"]
+          tag = os.environ["TAG"]
+
+          skeleton = '''class G < Formula
             desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
             homepage "https://git.7n.ai/7n/g"
-            version "${VERSION}"
+            version "0.0.0"
             license "ISC"
 
-            # macOS-асети зібрано кросскомпіляцією через cargo-zigbuild (без
-            # реального Mac-раннера) — без code signing/notarization, тож
-            # Gatekeeper попередить при першому запуску.
+            # BEGIN_MACOS
             on_macos do
-              if Hardware::CPU.arm?
-                url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-aarch64-apple-darwin"
-                sha256 "${SHA_MACOS_ARM64}"
-
-                def install
-                  bin.install "g-aarch64-apple-darwin" => "g"
-                end
-              else
-                url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-x86_64-apple-darwin"
-                sha256 "${SHA_MACOS_X64}"
-
-                def install
-                  bin.install "g-x86_64-apple-darwin" => "g"
-                end
-              end
+              odie "g: macOS build not yet published for this version"
             end
+            # END_MACOS
 
+            # BEGIN_LINUX
             on_linux do
-              url "https://git.7n.ai/7n/g/releases/download/${TAG}/g-x86_64-unknown-linux-musl"
-              sha256 "${SHA_LINUX}"
-
-              def install
-                bin.install "g-x86_64-unknown-linux-musl" => "g"
-              end
+              odie "g: Linux build not yet published for this version"
             end
+            # END_LINUX
 
             test do
               system "#{bin}/g", "--help"
             end
           end
-          EOF
+          '''
+
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          if not os.path.exists(path):
+              with open(path, "w") as f:
+                  f.write(skeleton)
+
+          with open(path) as f:
+              content = f.read()
+
+          content = re.sub(r'version "[^"]*"', 'version "%s"' % version, content, count=1)
+
+          linux_block = '''  # BEGIN_LINUX
+            on_linux do
+              url "https://git.7n.ai/7n/g/releases/download/%s/g-x86_64-unknown-linux-musl"
+              sha256 "%s"
+
+              def install
+                bin.install "g-x86_64-unknown-linux-musl" => "g"
+              end
+            end
+            # END_LINUX''' % (tag, sha)
+
+          content = re.sub(r'[ \t]*# BEGIN_LINUX.*?# END_LINUX', linux_block, content, count=1, flags=re.DOTALL)
+
+          with open(path, "w") as f:
+              f.write(content)
+          PYEOF
 
       - name: Commit and push
         working-directory: tap
