@@ -264,28 +264,42 @@ jobs:
 
       # Патчить ЛИШЕ секцію on_linux за BEGIN_LINUX/END_LINUX-маркерами, не
       # чіпаючи on_macos — той пише окремий GitHub Actions workflow
-      # (nitra-public/7n-g, macos-14), незалежно й у довільному порядку щодо
-      # цього job. Якщо файл ще не існує (перший реліз), створюємо skeleton
-      # з обома секціями як odie-заглушки. Чистий sed/awk, без python3 —
-      # частина варіантів self-hosted "ubuntu-latest"-образу його не мають
-      # ("python3: command not found", спостережено 2026-08-18).
-      - name: Update formula (on_linux section only)
+      # (nitra-public/7n-g, macos-14), НЕЗАЛЕЖНО й ПАРАЛЕЛЬНО (обидва
+      # тригеряться тим самим tag push). Тому просте clone→patch→commit→push
+      # (без ретраю) реально гонить у non-fast-forward-реджект: другий
+      # push бачить застарілий base, git його відхиляє — спостережено
+      # 2026-08-18 (linux-секція мовчки лишилась odie-заглушкою, бо
+      # forgejo-side push програв гонку GitHub-side push, а провал самого
+      # push, схоже, не зупиняв job — тож тепер явний ретрай-цикл із
+      # переклонуванням на кожній спробі, ідемпотентно). Якщо файл ще не в
+      # новому форматі (немає BEGIN_LINUX-маркера — старіший full-overwrite
+      # формат теж траплявся), перезаписуємо skeleton. Чистий sed/awk, без
+      # python3 — частина варіантів self-hosted "ubuntu-latest"-образу його
+      # не мають ("python3: command not found", спостережено 2026-08-18).
+      - name: Update formula and push (on_linux section only, retry on race)
         env:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
           TAG: ${{ github.ref_name }}
+        working-directory: tap
         run: |
           set -euo pipefail
-          FORMULA="tap/Formula/g.rb"
+          git config user.name "forgejo-actions"
+          git config user.email "forgejo-actions@git.7n.ai"
 
-          # "не існує" САМ ПО СОБІ недостатній — старіший формат файлу (до
-          # BEGIN/END-маркерів) вже існував у 7n/homebrew і не мав маркерів
-          # взагалі, тож grep-перевірка теж потрібна (без неї sed оновлював
-          # version, а awk-заміна секції тихо не спрацьовувала — застарілі
-          # url/sha256 лишались назавжди, спостережено 2026-08-18).
-          if [ ! -f "$FORMULA" ] || ! grep -q '# BEGIN_LINUX' "$FORMULA"; then
-            mkdir -p "$(dirname "$FORMULA")"
-            cat > "$FORMULA" <<'RUBYEOF'
+          FORMULA="Formula/g.rb"
+          success=0
+          for attempt in 1 2 3 4 5; do
+            if [ "$attempt" -gt 1 ]; then
+              echo "retry $attempt: re-fetching latest main"
+              git fetch origin main
+              git reset --hard origin/main
+              sleep $((attempt * 3))
+            fi
+
+            if [ ! -f "$FORMULA" ] || ! grep -q '# BEGIN_LINUX' "$FORMULA"; then
+              mkdir -p "$(dirname "$FORMULA")"
+              cat > "$FORMULA" <<'RUBYEOF'
           class G < Formula
             desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
             homepage "https://git.7n.ai/7n/g"
@@ -309,39 +323,45 @@ jobs:
             end
           end
           RUBYEOF
+            fi
+
+            sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" "$FORMULA" && rm -f "$FORMULA.bak"
+
+            awk -v tag="$TAG" -v sha="$SHA_LINUX" '
+              /# BEGIN_LINUX/ {
+                print "  # BEGIN_LINUX"
+                print "  on_linux do"
+                print "    url \"https://git.7n.ai/7n/g/releases/download/" tag "/g-x86_64-unknown-linux-musl\""
+                print "    sha256 \"" sha "\""
+                print ""
+                print "    def install"
+                print "      bin.install \"g-x86_64-unknown-linux-musl\" => \"g\""
+                print "    end"
+                print "  end"
+                print "  # END_LINUX"
+                skip=1
+                next
+              }
+              /# END_LINUX/ { skip=0; next }
+              skip { next }
+              { print }
+            ' "$FORMULA" > "$FORMULA.tmp" && mv "$FORMULA.tmp" "$FORMULA"
+
+            git add "$FORMULA"
+            if git diff --cached --quiet; then
+              echo "Formula already up to date"
+              success=1
+              break
+            fi
+            git commit -m "g ${VERSION}"
+            if git push; then
+              success=1
+              break
+            fi
+            echo "push rejected (attempt $attempt), will retry"
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::failed to push Formula/g.rb after retries"
+            exit 1
           fi
-
-          sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" "$FORMULA" && rm -f "$FORMULA.bak"
-
-          awk -v tag="$TAG" -v sha="$SHA_LINUX" '
-            /# BEGIN_LINUX/ {
-              print "  # BEGIN_LINUX"
-              print "  on_linux do"
-              print "    url \"https://git.7n.ai/7n/g/releases/download/" tag "/g-x86_64-unknown-linux-musl\""
-              print "    sha256 \"" sha "\""
-              print ""
-              print "    def install"
-              print "      bin.install \"g-x86_64-unknown-linux-musl\" => \"g\""
-              print "    end"
-              print "  end"
-              print "  # END_LINUX"
-              skip=1
-              next
-            }
-            /# END_LINUX/ { skip=0; next }
-            skip { next }
-            { print }
-          ' "$FORMULA" > "$FORMULA.tmp" && mv "$FORMULA.tmp" "$FORMULA"
-
-      - name: Commit and push
-        working-directory: tap
-        run: |
-          git config user.name "forgejo-actions"
-          git config user.email "forgejo-actions@git.7n.ai"
-          git add Formula/g.rb
-          if git diff --cached --quiet; then
-            echo "Formula already up to date"
-            exit 0
-          fi
-          git commit -m "g ${{ steps.meta.outputs.version }}"
-          git push

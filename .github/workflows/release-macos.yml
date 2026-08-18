@@ -94,13 +94,17 @@ jobs:
 
       # Патчить ЛИШЕ секцію on_macos за BEGIN_MACOS/END_MACOS-маркерами, не
       # чіпаючи on_linux — той пише git.7n.ai/.forgejo/workflows/release.yml,
-      # незалежно й у довільному порядку щодо цього job. Той самий skeleton,
-      # що й на боці Forgejo (створюється, якщо файл ще не існує).
+      # НЕЗАЛЕЖНО й ПАРАЛЕЛЬНО (обидва тригеряться тим самим tag push). Тому
+      # просте clone→patch→commit→push (без ретраю) реально гонить у
+      # non-fast-forward-реджект — спостережено 2026-08-18 (on_linux
+      # мовчки лишався odie-заглушкою, бо один з двох push програвав
+      # гонку). Тепер явний ретрай-цикл із переклонуванням на кожній
+      # спробі, ідемпотентно.
       #
       # actions/checkout не вміє в довільний git-хост (лише github.com/GHES),
       # тож клонуємо git.7n.ai вручну через http.extraheader (токен не
       # потрапляє в URL/git-логи).
-      - name: Update Homebrew formula (on_macos section only)
+      - name: Update Homebrew formula and push (on_macos section only, retry on race)
         env:
           TOKEN: ${{ secrets.FJ_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
@@ -108,17 +112,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          rm -rf tap
-          git -c http.extraheader="Authorization: token ${TOKEN}" clone https://git.7n.ai/7n/homebrew.git tap
-          cd tap
-          git config "http.https://git.7n.ai/.extraheader" "Authorization: token ${TOKEN}"
-          cd ..
 
-          python3 - <<'PYEOF'
+          cat > /tmp/patch_macos.py <<'PYEOF'
           import os
           import re
 
-          path = "tap/Formula/g.rb"
+          path = "Formula/g.rb"
           version = os.environ["VERSION"]
           sha = os.environ["SHA_MACOS_ARM64"]
           tag = os.environ["TAG"]
@@ -186,13 +185,39 @@ jobs:
               f.write(content)
           PYEOF
 
+          rm -rf tap
+          git -c http.extraheader="Authorization: token ${TOKEN}" clone https://git.7n.ai/7n/homebrew.git tap
           cd tap
+          git config "http.https://git.7n.ai/.extraheader" "Authorization: token ${TOKEN}"
           git config user.name "github-actions-macos"
           git config user.email "github-actions@git.7n.ai"
-          git add Formula/g.rb
-          if git diff --cached --quiet; then
-            echo "Formula already up to date"
-            exit 0
+
+          success=0
+          for attempt in 1 2 3 4 5; do
+            if [ "$attempt" -gt 1 ]; then
+              echo "retry $attempt: re-fetching latest main"
+              git fetch origin main
+              git reset --hard origin/main
+              sleep $((attempt * 3))
+            fi
+
+            python3 /tmp/patch_macos.py
+
+            git add Formula/g.rb
+            if git diff --cached --quiet; then
+              echo "Formula already up to date"
+              success=1
+              break
+            fi
+            git commit -m "g ${VERSION} (macOS)"
+            if git push; then
+              success=1
+              break
+            fi
+            echo "push rejected (attempt $attempt), will retry"
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::failed to push Formula/g.rb after retries"
+            exit 1
           fi
-          git commit -m "g ${VERSION} (macOS)"
-          git push
