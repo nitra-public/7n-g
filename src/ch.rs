@@ -247,17 +247,6 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Output> {
         .map_err(NError::Io)
 }
 
-fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
-    let out = run_git(cwd, args)?;
-    if !out.status.success() {
-        return Err(NError::GitCommand {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 fn git_text(cwd: &Path, args: &[&str]) -> String {
     run_git(cwd, args)
         .ok()
@@ -404,7 +393,8 @@ pub struct GitContext {
 }
 
 fn git_context(cwd: &Path) -> Result<GitContext> {
-    let repo_root = PathBuf::from(git_ok(cwd, &["rev-parse", "--show-toplevel"])?);
+    let repo_root = crate::gix_util::show_toplevel(cwd)
+        .ok_or_else(|| NError::Message("Ви не в Git репозиторії.".into()))?;
     let raw = run_git(&repo_root, &["status", "--porcelain=v1", "-z"])?;
     let changed = parse_porcelain_z(&String::from_utf8_lossy(&raw.stdout));
     let workspaces = resolve_workspaces(&repo_root);
