@@ -3,19 +3,39 @@ name: Release g (macOS)
 # Цей репозиторій — push-mirror з git.7n.ai/7n/g (sync_on_commit) у
 # nitra-public/7n-g, ЛИШЕ щоб мати доступ до реального GitHub-раннера
 # macos-14 (немає macOS-раннера на self-hosted git.7n.ai). Linux/Windows
-# збираються на git.7n.ai/.forgejo/workflows/release.yml — цей workflow
-# лише додає macOS-асет у ТОЙ САМИЙ git.7n.ai-реліз і патчить лише секцію
-# on_macos у Formula/g.rb (git.7n.ai/7n/homebrew), не чіпаючи on_linux.
+# збираються на git.7n.ai/.forgejo/workflows/release.yml і заливаються у
+# git.7n.ai-реліз — цей workflow чекає на нього, будує macOS, і ПЕРЕТЯГУЄ
+# всі три асети сюди, у СПРАВЖНІЙ публічний GitHub Release.
 #
-# FJ_TOKEN — git.7n.ai personal access token (write:repository), потрібен
-# для створення/апдейту релізу в 7n/g і push у 7n/homebrew — за тим самим
-# принципом, що й HOMEBREW_TAP_PAT на боці Forgejo.
+# Навіщо дублювати реліз на GitHub, а не просто посилатись на git.7n.ai
+# (спостережено 2026-08-19): git.7n.ai — навмисно приватний інстанс
+# (FORGEJO__service__REQUIRE_SIGNIN_VIEW: 'true' в nitra-protected/k8s,
+# "весь інстанс приватний, анонімний перегляд недоступний"). Анонімний
+# `curl`/`brew install` на `git.7n.ai/.../releases/download/...` отримує
+# 303-редирект на /user/login замість файлу — весь cargo-binstall/Homebrew
+# розповсюджувальний ланцюжок був би непридатний для будь-кого без акаунта
+# на git.7n.ai. GitHub Release тут — єдине публічне джерело бінарників;
+# git.7n.ai-реліз лишається як внутрішній/проміжний артефакт збірки.
+#
+# FJ_TOKEN — git.7n.ai personal access token (write:repository): читає
+# Linux/Windows-асети з git.7n.ai (приватні, авторизований запит їх
+# бачить, на відміну від анонімного) і апдейтить сам git.7n.ai-реліз.
+# HOMEBREW_TAP_GH_TOKEN — GitHub PAT з доступом до nitra/homebrew-7n
+# (окремий org від nitra-public) — публічний Homebrew tap, звідки
+# користувачі реально тапляться. Формула пишеться НАПРЯМУ сюди й НАПРЯМУ
+# в git.7n.ai/7n/homebrew (source of truth для історії), а не через
+# Forgejo push-mirror між ними — той мирор зараз зламаний на боці
+# git.7n.ai (`fatal: bad object` на refs/heads/main, серверна проблема
+# сховища git.7n.ai, поза нашим контролем).
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch: {}
+
+permissions:
+  contents: write
 
 jobs:
   build-macos:
@@ -86,88 +106,122 @@ jobs:
           curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=g-aarch64-apple-darwin" \
             -H "Authorization: token $TOKEN" -F "attachment=@dist/g-aarch64-apple-darwin"
 
-      - name: Compute version and checksum
+      # Чекаємо, поки Forgejo-пайплайн (build+release job там) реально
+      # доллє Linux/Windows — release_id вже існує раніше, ніж обидва
+      # build-джоби там завершились (needs: build у release.yml гарантує
+      # порядок УСЕРЕДИНІ Forgejo-пайплайну, але не відносно нас).
+      - name: Wait for Linux/Windows assets on git.7n.ai release
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          API: https://git.7n.ai/api/v1
+          REPO: 7n/g
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            names=$(curl -fsS "$API/repos/$REPO/releases/$release_id" \
+              -H "Authorization: token $TOKEN" | grep -o '"name":"[^"]*"' || true)
+            if echo "$names" | grep -q 'g-x86_64-unknown-linux-musl' && echo "$names" | grep -q 'g-x86_64-pc-windows-msvc.exe'; then
+              echo "both assets present"
+              exit 0
+            fi
+            echo "waiting for linux/windows assets (attempt $i)..."
+            sleep 30
+          done
+          echo "::error::linux/windows assets never appeared on git.7n.ai release"
+          exit 1
+
+      # git.7n.ai — приватний інстанс (REQUIRE_SIGNIN_VIEW), анонімний
+      # download неможливий — тягнемо авторизованим запитом і копіюємо
+      # байт-в-байт у GitHub Release нижче.
+      - name: Download Linux/Windows assets from git.7n.ai
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          API: https://git.7n.ai/api/v1
+          REPO: 7n/g
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "$API/repos/$REPO/releases/tags/$TAG" \
+            -H "Authorization: token $TOKEN" -o /tmp/release.json
+          for asset in g-x86_64-unknown-linux-musl g-x86_64-pc-windows-msvc.exe; do
+            url=$(python3 -c "
+          import json
+          d = json.load(open('/tmp/release.json'))
+          matches = [a['browser_download_url'] for a in d['assets'] if a['name'] == '$asset']
+          print(matches[-1])
+          ")
+            curl -fsSL "$url" -H "Authorization: token $TOKEN" -o "dist/$asset"
+          done
+          ls -la dist/
+
+      - name: Compute version and checksums
         id: meta
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "sha_macos_arm64=$(shasum -a 256 dist/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_linux_x86_64=$(shasum -a 256 dist/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_windows_x86_64=$(shasum -a 256 dist/g-x86_64-pc-windows-msvc.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      # Патчить ЛИШЕ секцію on_macos за BEGIN_MACOS/END_MACOS-маркерами, не
-      # чіпаючи on_linux — той пише git.7n.ai/.forgejo/workflows/release.yml,
-      # НЕЗАЛЕЖНО й ПАРАЛЕЛЬНО (обидва тригеряться тим самим tag push). Тому
-      # просте clone→patch→commit→push (без ретраю) реально гонить у
-      # non-fast-forward-реджект — спостережено 2026-08-18 (on_linux
-      # мовчки лишався odie-заглушкою, бо один з двох push програвав
-      # гонку). Тепер явний ретрай-цикл із переклонуванням на кожній
-      # спробі, ідемпотентно.
-      #
-      # actions/checkout не вміє в довільний git-хост (лише github.com/GHES),
-      # тож клонуємо git.7n.ai вручну через http.extraheader (токен не
-      # потрапляє в URL/git-логи).
-      - name: Update Homebrew formula and push (on_macos section only, retry on race)
+      # Ідемпотентно: якщо реліз з цим тегом уже існує (напр. повторний
+      # прогін після збою нижче за пайплайном) — довантажуємо/перезаписуємо
+      # лише асети, не падаємо на "already exists".
+      - name: Create/update public GitHub release with all 3 assets
         env:
-          TOKEN: ${{ secrets.FJ_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          SHA_MACOS_ARM64: ${{ steps.meta.outputs.sha_macos_arm64 }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes ""
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/g-aarch64-apple-darwin \
+            dist/g-x86_64-unknown-linux-musl \
+            dist/g-x86_64-pc-windows-msvc.exe
 
-          cat > /tmp/patch_macos.py <<'PYEOF'
+      # Формула тепер пишеться ЦІЛКОМ (обидві секції) звідси — єдиний
+      # writer, без гонки з Forgejo-стороннім update-homebrew-tap job
+      # (той job видалено з release.yml саме тому). URL вказують на
+      # ПУБЛІЧНИЙ GitHub Release (nitra-public/7n-g), не на приватний
+      # git.7n.ai — див. пояснення на початку файлу.
+      #
+      # Пишемо у ДВА місця: git.7n.ai/7n/homebrew (source of truth,
+      # людська історія) і напряму github.com/nitra/homebrew-7n
+      # (публічний tap, звідки реально `brew tap`/`brew install`) — не
+      # покладаючись на Forgejo push-mirror між ними (зараз зламаний,
+      # `fatal: bad object` на боці git.7n.ai, поза нашим контролем).
+      - name: Update Homebrew formula (both sections, both tap repos)
+        env:
+          FJ_TOKEN: ${{ secrets.FJ_TOKEN }}
+          GH_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GH_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA_MACOS_ARM64: ${{ steps.meta.outputs.sha_macos_arm64 }}
+          SHA_LINUX_X86_64: ${{ steps.meta.outputs.sha_linux_x86_64 }}
+          SHA_WINDOWS_X86_64: ${{ steps.meta.outputs.sha_windows_x86_64 }}
+          TAG: ${{ github.ref_name }}
+          RELEASE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          cat > /tmp/write_formula.py <<'PYEOF'
           import os
-          import re
 
-          path = "Formula/g.rb"
           version = os.environ["VERSION"]
-          sha = os.environ["SHA_MACOS_ARM64"]
+          sha_macos = os.environ["SHA_MACOS_ARM64"]
+          sha_linux = os.environ["SHA_LINUX_X86_64"]
           tag = os.environ["TAG"]
+          release_repo = os.environ["RELEASE_REPO"]
 
-          skeleton = '''class G < Formula
+          content = '''class G < Formula
             desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
             homepage "https://git.7n.ai/7n/g"
-            version "0.0.0"
+            version "%s"
             license "ISC"
 
             # BEGIN_MACOS
             on_macos do
-              odie "g: macOS build not yet published for this version"
-            end
-            # END_MACOS
-
-            # BEGIN_LINUX
-            on_linux do
-              odie "g: Linux build not yet published for this version"
-            end
-            # END_LINUX
-
-            test do
-              system "#{bin}/g", "--help"
-            end
-          end
-          '''
-
-          # "не існує" САМ ПО СОБІ недостатній — старіший формат файлу (до
-          # BEGIN/END-маркерів) вже існував у 7n/homebrew без маркерів
-          # взагалі, тож regex-заміна секції тихо не спрацьовувала
-          # (спостережено 2026-08-18, той самий баг на Forgejo-стороні).
-          os.makedirs(os.path.dirname(path), exist_ok=True)
-          needs_skeleton = not os.path.exists(path)
-          if not needs_skeleton:
-              with open(path) as f:
-                  needs_skeleton = "# BEGIN_MACOS" not in f.read()
-          if needs_skeleton:
-              with open(path, "w") as f:
-                  f.write(skeleton)
-
-          with open(path) as f:
-              content = f.read()
-
-          content = re.sub(r'version "[^"]*"', 'version "%s"' % version, content, count=1)
-
-          macos_block = '''  # BEGIN_MACOS
-            on_macos do
               if Hardware::CPU.arm?
-                url "https://git.7n.ai/7n/g/releases/download/%s/g-aarch64-apple-darwin"
+                url "https://github.com/%s/releases/download/%s/g-aarch64-apple-darwin"
                 sha256 "%s"
 
                 def install
@@ -177,47 +231,65 @@ jobs:
                 odie "g: x86_64 macOS ще не підтримується (немає x86_64-apple-darwin ассету)"
               end
             end
-            # END_MACOS''' % (tag, sha)
+            # END_MACOS
 
-          content = re.sub(r'[ \t]*# BEGIN_MACOS.*?# END_MACOS', macos_block, content, count=1, flags=re.DOTALL)
+            # BEGIN_LINUX
+            on_linux do
+              url "https://github.com/%s/releases/download/%s/g-x86_64-unknown-linux-musl"
+              sha256 "%s"
 
-          with open(path, "w") as f:
+              def install
+                bin.install "g-x86_64-unknown-linux-musl" => "g"
+              end
+            end
+            # END_LINUX
+
+            test do
+              system "#{bin}/g", "--help"
+            end
+          end
+          ''' % (version, release_repo, tag, sha_macos, release_repo, tag, sha_linux)
+
+          with open("Formula/g.rb", "w") as f:
               f.write(content)
           PYEOF
 
-          rm -rf tap
-          git -c http.extraheader="Authorization: token ${TOKEN}" clone https://git.7n.ai/7n/homebrew.git tap
-          cd tap
-          git config "http.https://git.7n.ai/.extraheader" "Authorization: token ${TOKEN}"
-          git config user.name "github-actions-macos"
-          git config user.email "github-actions@git.7n.ai"
+          push_with_retry() {
+            local clone_url="$1"
+            local token_header="$2"
+            local dir="$3"
+            rm -rf "$dir"
+            git -c http.extraheader="$token_header" clone "$clone_url" "$dir"
+            cd "$dir"
+            git config "http.extraheader" "$token_header"
+            git config user.name "github-actions-release"
+            git config user.email "github-actions@git.7n.ai"
 
-          success=0
-          for attempt in 1 2 3 4 5; do
-            if [ "$attempt" -gt 1 ]; then
-              echo "retry $attempt: re-fetching latest main"
-              git fetch origin main
-              git reset --hard origin/main
-              sleep $((attempt * 3))
-            fi
+            for attempt in 1 2 3 4 5; do
+              if [ "$attempt" -gt 1 ]; then
+                echo "retry $attempt: re-fetching latest main"
+                git fetch origin
+                git reset --hard origin/HEAD
+                sleep $((attempt * 3))
+              fi
+              mkdir -p Formula
+              python3 /tmp/write_formula.py
+              git add Formula/g.rb
+              if git diff --cached --quiet; then
+                echo "Formula already up to date in $dir"
+                cd ..
+                return 0
+              fi
+              git commit -m "g ${VERSION}"
+              if git push; then
+                cd ..
+                return 0
+              fi
+              echo "push rejected (attempt $attempt), will retry"
+            done
+            echo "::error::failed to push Formula/g.rb in $dir after retries"
+            return 1
+          }
 
-            python3 /tmp/patch_macos.py
-
-            git add Formula/g.rb
-            if git diff --cached --quiet; then
-              echo "Formula already up to date"
-              success=1
-              break
-            fi
-            git commit -m "g ${VERSION} (macOS)"
-            if git push; then
-              success=1
-              break
-            fi
-            echo "push rejected (attempt $attempt), will retry"
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "::error::failed to push Formula/g.rb after retries"
-            exit 1
-          fi
+          push_with_retry "https://git.7n.ai/7n/homebrew.git" "Authorization: token ${FJ_TOKEN}" tap-fj
+          push_with_retry "https://github.com/nitra/homebrew-7n.git" "Authorization: token ${GH_TAP_TOKEN}" tap-gh
