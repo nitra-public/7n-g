@@ -2563,7 +2563,8 @@ dependencies = [
 [[package]]
 name = "n7n-gix-util"
 version = "0.1.0"
-source = "git+https://git.7n.ai/7n/llm-lib?rev=3a33210009c5866181756fa81d87b108dc4b216c#3a33210009c5866181756fa81d87b108dc4b216c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b1a78d42a21e72c1b00c4405424857f0d995aaf5233e0ea8cb32d52a3f20977"
 dependencies = [
  "gix",
 ]
