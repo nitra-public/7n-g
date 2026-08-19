@@ -660,4 +660,214 @@ mod tests {
             "keep me, modified\n"
         );
     }
+
+    #[test]
+    fn rescued_file_deleted_by_ours_but_modified_by_src() {
+        let dir = init_repo();
+        write(dir.path(), "a.txt", "keep me\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "init"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "src-branch"]);
+        write(dir.path(), "a.txt", "keep me, modified by src\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "src modifies a.txt"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
+        std::fs::remove_file(dir.path().join("a.txt")).unwrap();
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "ours deletes a.txt"]);
+
+        let outcome = delta_merge(
+            DeltaMergeOpts {
+                cwd: dir.path(),
+                ours: "ours-branch",
+                src: "src-branch",
+                ours_label: None,
+                src_label: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(outcome.is_clean());
+        assert_eq!(outcome.rescued.len(), 1);
+        assert_eq!(outcome.rescued[0].path, "a.txt");
+        assert_eq!(outcome.rescued[0].deleted_by, RescueSide::Ours);
+        assert!(dir.path().join("a.txt").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "keep me, modified by src\n"
+        );
+    }
+
+    #[test]
+    fn lock_file_take_src_on_conflicting_changes() {
+        let dir = init_repo();
+        write(dir.path(), "package-lock.json", "{\"version\": \"base\"}\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "init"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "src-branch"]);
+        write(
+            dir.path(),
+            "package-lock.json",
+            "{\"version\": \"from-src\"}\n",
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "src changes lock"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
+        write(
+            dir.path(),
+            "package-lock.json",
+            "{\"version\": \"from-ours-conflicting\"}\n",
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "ours changes lock too"]);
+
+        let outcome = delta_merge(
+            DeltaMergeOpts {
+                cwd: dir.path(),
+                ours: "ours-branch",
+                src: "src-branch",
+                ours_label: None,
+                src_label: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(outcome.is_clean());
+        assert!(outcome.tier3.is_empty());
+        assert_eq!(
+            outcome.lock_files_taken_from_src,
+            vec!["package-lock.json".to_string()]
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("package-lock.json")).unwrap(),
+            "{\"version\": \"from-src\"}\n"
+        );
+    }
+
+    #[test]
+    fn bun_lock_regen_flag_set_when_differs() {
+        let dir = init_repo();
+        write(dir.path(), "bun.lock", "base\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "init"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "src-branch"]);
+        write(dir.path(), "bun.lock", "from-src\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "src changes bun.lock"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
+        write(dir.path(), "bun.lock", "from-ours\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "ours changes bun.lock differently"]);
+
+        let outcome = delta_merge(
+            DeltaMergeOpts {
+                cwd: dir.path(),
+                ours: "ours-branch",
+                src: "src-branch",
+                ours_label: None,
+                src_label: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(outcome.is_clean());
+        assert!(outcome.regen_bun_lock);
+        assert!(outcome.lock_files_taken_from_src.is_empty());
+        // bun.lock не мержиться пофайлово — робоче дерево лишається версією ours.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("bun.lock")).unwrap(),
+            "from-ours\n"
+        );
+    }
+
+    #[test]
+    fn bun_lock_no_regen_when_same_content() {
+        let dir = init_repo();
+        write(dir.path(), "bun.lock", "base\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "init"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "src-branch"]);
+        write(dir.path(), "bun.lock", "same-final\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "src changes bun.lock"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
+        write(dir.path(), "bun.lock", "same-final\n");
+        git(dir.path(), &["add", "-A"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "-m", "ours independently converges to same lock"],
+        );
+
+        let outcome = delta_merge(
+            DeltaMergeOpts {
+                cwd: dir.path(),
+                ours: "ours-branch",
+                src: "src-branch",
+                ours_label: None,
+                src_label: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        assert!(outcome.is_clean());
+        assert!(!outcome.regen_bun_lock);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("bun.lock")).unwrap(),
+            "same-final\n"
+        );
+    }
+
+    #[test]
+    fn nested_bun_lock_is_not_root_special_cased() {
+        let dir = init_repo();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        write(dir.path(), "sub/bun.lock", "line1\nline2\nline3\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "init"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "src-branch"]);
+        write(dir.path(), "sub/bun.lock", "line1\nline2-src\nline3\n");
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "src changes nested bun.lock"]);
+
+        git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
+        write(dir.path(), "sub/bun.lock", "line1\nline2-ours\nline3\n");
+        git(dir.path(), &["add", "-A"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "-m", "ours changes nested bun.lock too"],
+        );
+
+        let outcome = delta_merge(
+            DeltaMergeOpts {
+                cwd: dir.path(),
+                ours: "ours-branch",
+                src: "src-branch",
+                ours_label: None,
+                src_label: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        // Некореневий bun.lock не є спецкейсом: конфліктуючі зміни йдуть через
+        // звичайний Tier 1 3-way і лишаються нерозв'язаним конфліктом (без резолвера),
+        // а не автоматично беруться з src чи позначаються на regen.
+        assert!(!outcome.is_clean());
+        assert!(!outcome.regen_bun_lock);
+        assert!(outcome.lock_files_taken_from_src.is_empty());
+        assert_eq!(outcome.conflict_files, vec!["sub/bun.lock".to_string()]);
+    }
 }
