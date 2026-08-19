@@ -86,8 +86,7 @@ pub fn run(
     branch: Option<&str>,
     resolver: Option<&dyn ConflictResolver>,
 ) -> Result<PullOutcome> {
-    let inside = run_git(cwd, &["rev-parse", "--is-inside-work-tree"])?;
-    if !inside.status.success() {
+    if !crate::is_inside_work_tree(cwd) {
         return Err(NError::Message("Ви не в Git репозиторії.".into()));
     }
 

@@ -251,8 +251,7 @@ pub fn run(
     picker: &dyn WorktreePicker,
     resolver: Option<&dyn ConflictResolver>,
 ) -> Result<GetwOutcome> {
-    let inside = run_git(cwd, &["rev-parse", "--is-inside-work-tree"])?;
-    if !inside.status.success() {
+    if !crate::is_inside_work_tree(cwd) {
         return Err(NError::Message("Ви не в Git репозиторії.".into()));
     }
 

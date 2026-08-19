@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "n7n-g"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "assert_cmd",
  "chrono",
