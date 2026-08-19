@@ -259,4 +259,30 @@ pub mod gix_util {
         }
         Some(root.to_hex().to_string())
     }
+
+    /// Еквівалент `git worktree list` (лише *linked* worktree — головне робоче
+    /// дерево `gix` в цей перелік свідомо не рахує, так само як і оригінальний
+    /// текстовий парсер тут ігнорував основне дерево фільтром по `.worktrees/`).
+    /// `branch = None` — detached HEAD у тому worktree.
+    pub fn list_worktrees(cwd: &Path) -> Vec<(std::path::PathBuf, Option<String>)> {
+        let Some(repo) = gix::discover(cwd).ok() else {
+            return Vec::new();
+        };
+        let Ok(proxies) = repo.worktrees() else {
+            return Vec::new();
+        };
+        proxies
+            .into_iter()
+            .filter_map(|proxy| {
+                let path = proxy.base().ok()?;
+                let branch = proxy
+                    .into_repo_with_possibly_inaccessible_worktree()
+                    .ok()
+                    .and_then(|r| r.head_name().ok().flatten())
+                    .and_then(|name| name.as_bstr().strip_prefix(b"refs/heads/").map(|b| b.to_vec()))
+                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                Some((path, branch))
+            })
+            .collect()
+    }
 }

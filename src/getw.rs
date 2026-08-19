@@ -83,6 +83,7 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Output> {
         .map_err(NError::Io)
 }
 
+#[cfg(test)]
 fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
     let out = run_git(cwd, args)?;
     if !out.status.success() {
@@ -92,19 +93,6 @@ fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Розбір одного рядка `git worktree list`: `<path>  <sha> [<branch>]` (детач — без
-/// дужок). Шлях — перший пробільний токен (як у JS-оригіналі `awk '{print $1}'`,
-/// та сама обмеженість — не працює для шляхів з пробілами).
-fn parse_worktree_line(line: &str) -> Option<(PathBuf, Option<String>)> {
-    let path = line.split_whitespace().next()?;
-    let branch = line.find('[').and_then(|start| {
-        line[start + 1..]
-            .find(']')
-            .map(|end| line[start + 1..start + 1 + end].to_string())
-    });
-    Some((PathBuf::from(path), branch))
 }
 
 /// Еквівалент `_getw_delta_empty`: `true`, лише якщо немає незакомічених змін у
@@ -196,16 +184,13 @@ fn newest_file_mtime(dir: &Path) -> Option<std::time::SystemTime> {
 /// порожньою дельтою (worktree + гілка видаляються мовчки, у результат не потрапляють).
 pub fn discover(cwd: &Path) -> Result<DiscoverOutcome> {
     let current_branch = crate::gix_util::current_branch(cwd).unwrap_or_default();
-    let list = git_ok(cwd, &["worktree", "list"])?;
+    let list = crate::gix_util::list_worktrees(cwd);
 
     let mut outcome = DiscoverOutcome::default();
-    for line in list.lines() {
-        if line.is_empty() || !line.contains("/.worktrees/") {
+    for (wt_path, branch) in list {
+        if !wt_path.to_string_lossy().contains("/.worktrees/") {
             continue;
         }
-        let Some((wt_path, branch)) = parse_worktree_line(line) else {
-            continue;
-        };
 
         if wt_path != cwd {
             if let Some(branch) = &branch {
