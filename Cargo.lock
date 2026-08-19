@@ -2547,6 +2547,7 @@ dependencies = [
  "crossterm",
  "ctrlc",
  "gix",
+ "n7n-gix-util",
  "n7n-llm-lib",
  "nucleo-matcher",
  "predicates",
@@ -2557,6 +2558,14 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "n7n-gix-util"
+version = "0.1.0"
+source = "git+https://git.7n.ai/7n/llm-lib?rev=3a33210009c5866181756fa81d87b108dc4b216c#3a33210009c5866181756fa81d87b108dc4b216c"
+dependencies = [
+ "gix",
 ]
 
 [[package]]

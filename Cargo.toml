@@ -22,6 +22,20 @@ pkg-fmt = "bin"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 gix = "0.70"
+# show_toplevel — спільний з n7n-llm-lib/n7n-harness тонкий gix-хелпер
+# (`rev-parse --show-toplevel`), винесений звідти в окремий крейт саме щоб
+# і `g` міг перевикористати замість власної копії (git.7n.ai/7n/llm-lib
+# PR #5/#6). Git-залежність, не crates.io: `n7n-gix-util` там ще не
+# опубліковано, а `g` сам не публікується на crates.io (лише бінарні
+# релізи через Forgejo/binstall — `[package.metadata.binstall]` вище), тож
+# правило crates.io "лише registry-залежності" тут не діє. Явний `package
+# =` обов'язковий із ДВОХ причин: (1) без нього Cargo не вгадає, який саме
+# крейт workspace-репозиторію `llm-lib` брати; (2) сам крейт має `[lib]
+# name = "gix_util"`, а без перейменування ключем це колізувало б із
+# локальним `pub mod gix_util` нижче в `src/lib.rs` — `package =` форсує
+# експортоване ім'я саме в те, що зліва (`n7n_gix_util`), незалежно від
+# `[lib].name` пакета.
+n7n-gix-util = { git = "https://git.7n.ai/7n/llm-lib", rev = "3a33210009c5866181756fa81d87b108dc4b216c", package = "n7n-gix-util" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

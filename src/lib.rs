@@ -190,10 +190,12 @@ pub mod gix_util {
     }
 
     /// Еквівалент `git rev-parse --show-toplevel`: завжди абсолютний шлях,
-    /// незалежно від того, відносним чи абсолютним був `cwd`.
+    /// незалежно від того, відносним чи абсолютним був `cwd`. Делегує в
+    /// спільний крейт `n7n-gix-util` (той самий хелпер, що й у
+    /// `n7n-llm-lib`/`n7n-harness`) замість власної копії — раніше тут
+    /// був ідентичний трирядковий блок.
     pub fn show_toplevel(cwd: &Path) -> Option<std::path::PathBuf> {
-        let dir = gix::discover(cwd).ok()?.work_dir()?.to_path_buf();
-        Some(dir.canonicalize().unwrap_or(dir))
+        n7n_gix_util::show_toplevel(cwd)
     }
 
     /// Еквівалент `git branch -D <name>`: `true`, якщо ref видалено. Best-effort,
