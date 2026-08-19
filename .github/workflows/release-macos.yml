@@ -292,4 +292,9 @@ jobs:
           }
 
           push_with_retry "https://git.7n.ai/7n/homebrew.git" "Authorization: token ${FJ_TOKEN}" tap-fj
-          push_with_retry "https://github.com/nitra/homebrew-7n.git" "Authorization: token ${GH_TAP_TOKEN}" tap-gh
+          # GitHub's git-over-https не приймає "Authorization: token X" (той
+          # формат, що спрацьовує на Forgejo/git.7n.ai) — потрібен Basic auth
+          # з x-access-token як username (спостережено 2026-08-19: "could not
+          # read Username for 'https://github.com'" з токен-схемою).
+          GH_TAP_BASIC=$(printf 'x-access-token:%s' "${GH_TAP_TOKEN}" | base64)
+          push_with_retry "https://github.com/nitra/homebrew-7n.git" "Authorization: Basic ${GH_TAP_BASIC}" tap-gh
