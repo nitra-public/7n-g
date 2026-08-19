@@ -1,12 +1,11 @@
-use std::io::Write;
-
 use clap::{Parser, Subcommand};
 #[cfg(feature = "agents")]
 use n7n_g::acp_agents::AcpAgentAdapter;
 use n7n_g::ch::ChReport;
-use n7n_g::getw::{GetwOutcome, WorktreeCandidate, WorktreePicker};
+use n7n_g::getw::GetwOutcome;
 use n7n_g::pull::PullOutcome;
 use n7n_g::push::PushOutcome;
+use n7n_g::tui_picker::TuiPicker;
 use n7n_g::{ch, getw, pull, push, NError, Result};
 
 #[derive(Parser)]
@@ -43,43 +42,6 @@ fn main() -> Result<()> {
     }
 }
 
-/// Тимчасовий stdin-пікер (нумерований список + `read_line`) — до нативного TUI
-/// fuzzy-picker (ADR 20260814-195911, ідея #3: `skim`/`nucleo` замість `fzf`).
-struct StdinPicker;
-
-impl WorktreePicker for StdinPicker {
-    fn pick<'a>(
-        &self,
-        candidates: &'a [WorktreeCandidate],
-    ) -> std::io::Result<Option<&'a WorktreeCandidate>> {
-        println!("Оберіть worktree для перенесення змін:");
-        println!("   0) ❌ Відміна");
-        for (i, c) in candidates.iter().enumerate() {
-            println!("   {}) {}", i + 1, c.name);
-            if let Some(task) = &c.task {
-                println!("      Задача: {task}");
-            }
-            if let Some(created) = &c.created {
-                println!("      🕒 Створено: {created}");
-            }
-            if let Some(modified) = &c.modified {
-                println!("      ✏️  Змінено:  {modified}");
-            }
-        }
-        print!("> ");
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        let choice: usize = input.trim().parse().unwrap_or(0);
-        Ok(if choice == 0 {
-            None
-        } else {
-            candidates.get(choice - 1)
-        })
-    }
-}
-
 fn run_getw() -> Result<()> {
     let cwd = std::env::current_dir()?;
     #[cfg(feature = "agents")]
@@ -89,7 +51,7 @@ fn run_getw() -> Result<()> {
     #[cfg(not(feature = "agents"))]
     let resolver: Option<&dyn n7n_g::merge::ConflictResolver> = None;
 
-    let outcome = getw::run(&cwd, &StdinPicker, resolver)?;
+    let outcome = getw::run(&cwd, &TuiPicker, resolver)?;
     match outcome {
         GetwOutcome::NoWorktrees => {
             println!("📭 У папці .worktrees не знайдено жодного робочого дерева.");

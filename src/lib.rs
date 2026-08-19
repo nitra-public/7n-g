@@ -10,6 +10,7 @@ pub mod getw;
 pub mod merge;
 pub mod pull;
 pub mod push;
+pub mod tui_picker;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NError {

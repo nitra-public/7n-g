@@ -44,6 +44,13 @@ llm-lib = { version = "0.2.4", package = "n7n-llm-lib", optional = true }
 # (acp_agents.rs) — сам llm-lib теж на tokio, окрема декларація потрібна для
 # виклику Runtime у нашому крейті.
 tokio = { version = "1", features = ["rt", "rt-multi-thread"], optional = true }
+# Нативний TUI fuzzy-picker для `getw` (tui_picker.rs) — розкладка raw-mode/подій
+# крос-платформно (Linux/macOS/Windows), на відміну від Unix-специфічного termios.
+crossterm = "0.29"
+# Fuzzy-matching рядків у пікері — той самий алгоритм, що в helix/telescope.nvim,
+# активно підтримується (на відміну від застарілого fuzzy-matcher/skim); без
+# залежності на весь `skim`-бінарник.
+nucleo-matcher = "0.3"
 
 [features]
 default = ["agents"]
