@@ -59,6 +59,7 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Output> {
         .map_err(NError::Io)
 }
 
+#[cfg(test)]
 fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
     let out = run_git(cwd, args)?;
     if !out.status.success() {
@@ -86,21 +87,19 @@ pub fn run(
     branch: Option<&str>,
     resolver: Option<&dyn ConflictResolver>,
 ) -> Result<PullOutcome> {
-    let inside = run_git(cwd, &["rev-parse", "--is-inside-work-tree"])?;
-    if !inside.status.success() {
+    if !crate::is_inside_work_tree(cwd) {
         return Err(NError::Message("Ви не в Git репозиторії.".into()));
     }
 
     let branch = match branch {
         Some(b) if !b.is_empty() => b.to_string(),
         _ => {
-            let current = git_ok(cwd, &["branch", "--show-current"])?;
-            if current.is_empty() {
+            let Some(current) = crate::gix_util::current_branch(cwd) else {
                 return Err(NError::Message(
                     "Не вдалося визначити гілку (detached HEAD?). Вкажи явно: g pull <branch>"
                         .into(),
                 ));
-            }
+            };
             current
         }
     };
@@ -113,20 +112,17 @@ pub fn run(
     }
 
     let remote_ref = format!("origin/{branch}");
-    let verify = run_git(cwd, &["rev-parse", "--verify", &remote_ref])?;
-    if !verify.status.success() {
+    let Some(remote_sha) = crate::gix_util::rev_parse(cwd, &remote_ref) else {
         return Err(NError::Message(format!("Гілку {remote_ref} не знайдено.")));
-    }
+    };
 
-    let old_head = git_ok(cwd, &["rev-parse", "HEAD"])?;
-    let remote_sha = git_ok(cwd, &["rev-parse", &remote_ref])?;
+    let old_head = crate::gix_util::rev_parse(cwd, "HEAD")
+        .ok_or_else(|| NError::Message("Не вдалося визначити HEAD.".into()))?;
     if old_head == remote_sha {
         return Ok(PullOutcome::AlreadyUpToDate);
     }
 
-    let is_ancestor = run_git(cwd, &["merge-base", "--is-ancestor", "HEAD", &remote_ref])?
-        .status
-        .success();
+    let is_ancestor = crate::gix_util::is_ancestor(cwd, "HEAD", &remote_ref);
     if is_ancestor {
         let ff = run_git(cwd, &["merge", "--ff-only", &remote_ref])?;
         if ff.status.success() {
