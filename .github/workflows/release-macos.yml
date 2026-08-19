@@ -45,16 +45,25 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Build
+      - name: Build (arm64)
         run: cargo build --release --target aarch64-apple-darwin --bin g
 
-      - name: Stage binary
+      # x86_64-apple-darwin — крос-компіляція ПРЯМО тут, на macos-14
+      # (Apple Silicon): на відміну від Linux-раннера (де zigbuild впирався
+      # в aws-lc-sys, якому потрібен реальний Apple SDK, недоступний через
+      # Zig-заглушки), тут повний Xcode SDK вже є нативно — обидва
+      # apple-darwin-таргети компілюються без жодних додаткових кроків.
+      - name: Build (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin --bin g
+
+      - name: Stage binaries
         run: |
           mkdir -p dist
           cp target/aarch64-apple-darwin/release/g dist/g-aarch64-apple-darwin
-          chmod +x dist/g-aarch64-apple-darwin
+          cp target/x86_64-apple-darwin/release/g dist/g-x86_64-apple-darwin
+          chmod +x dist/g-aarch64-apple-darwin dist/g-x86_64-apple-darwin
 
       # Forgejo-пайплайн (linux+windows) тригериться тим самим tag push і
       # може ще не встигнути створити реліз — чекаємо появи (до ~20 хв,
@@ -96,15 +105,17 @@ jobs:
             -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
           echo "release_id=$release_id" >> "$GITHUB_ENV"
 
-      - name: Upload macOS asset to git.7n.ai release
+      - name: Upload macOS assets to git.7n.ai release
         env:
           TOKEN: ${{ secrets.FJ_TOKEN }}
           API: https://git.7n.ai/api/v1
           REPO: 7n/g
         run: |
           set -euo pipefail
-          curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=g-aarch64-apple-darwin" \
-            -H "Authorization: token $TOKEN" -F "attachment=@dist/g-aarch64-apple-darwin"
+          for asset in g-aarch64-apple-darwin g-x86_64-apple-darwin; do
+            curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=$asset" \
+              -H "Authorization: token $TOKEN" -F "attachment=@dist/$asset"
+          done
 
       # Чекаємо, поки Forgejo-пайплайн (build+release job там) реально
       # доллє Linux/Windows — release_id вже існує раніше, ніж обидва
@@ -159,13 +170,14 @@ jobs:
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "sha_macos_arm64=$(shasum -a 256 dist/g-aarch64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "sha_macos_x86_64=$(shasum -a 256 dist/g-x86_64-apple-darwin | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "sha_linux_x86_64=$(shasum -a 256 dist/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "sha_windows_x86_64=$(shasum -a 256 dist/g-x86_64-pc-windows-msvc.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       # Ідемпотентно: якщо реліз з цим тегом уже існує (напр. повторний
       # прогін після збою нижче за пайплайном) — довантажуємо/перезаписуємо
       # лише асети, не падаємо на "already exists".
-      - name: Create/update public GitHub release with all 3 assets
+      - name: Create/update public GitHub release with all 4 assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -176,6 +188,7 @@ jobs:
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             dist/g-aarch64-apple-darwin \
+            dist/g-x86_64-apple-darwin \
             dist/g-x86_64-unknown-linux-musl \
             dist/g-x86_64-pc-windows-msvc.exe
 
@@ -196,6 +209,7 @@ jobs:
           GH_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GH_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
           SHA_MACOS_ARM64: ${{ steps.meta.outputs.sha_macos_arm64 }}
+          SHA_MACOS_X86_64: ${{ steps.meta.outputs.sha_macos_x86_64 }}
           SHA_LINUX_X86_64: ${{ steps.meta.outputs.sha_linux_x86_64 }}
           SHA_WINDOWS_X86_64: ${{ steps.meta.outputs.sha_windows_x86_64 }}
           TAG: ${{ github.ref_name }}
@@ -206,37 +220,45 @@ jobs:
           cat > /tmp/write_formula.py <<'PYEOF'
           import os
 
-          version = os.environ["VERSION"]
-          sha_macos = os.environ["SHA_MACOS_ARM64"]
-          sha_linux = os.environ["SHA_LINUX_X86_64"]
-          tag = os.environ["TAG"]
-          release_repo = os.environ["RELEASE_REPO"]
+          v = dict(
+              version=os.environ["VERSION"],
+              sha_macos_arm64=os.environ["SHA_MACOS_ARM64"],
+              sha_macos_x86_64=os.environ["SHA_MACOS_X86_64"],
+              sha_linux=os.environ["SHA_LINUX_X86_64"],
+              tag=os.environ["TAG"],
+              repo=os.environ["RELEASE_REPO"],
+          )
 
           content = '''class G < Formula
             desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
             homepage "https://git.7n.ai/7n/g"
-            version "%s"
+            version "{version}"
             license "ISC"
 
             # BEGIN_MACOS
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/%s/releases/download/%s/g-aarch64-apple-darwin"
-                sha256 "%s"
+                url "https://github.com/{repo}/releases/download/{tag}/g-aarch64-apple-darwin"
+                sha256 "{sha_macos_arm64}"
 
                 def install
                   bin.install "g-aarch64-apple-darwin" => "g"
                 end
               else
-                odie "g: x86_64 macOS ще не підтримується (немає x86_64-apple-darwin ассету)"
+                url "https://github.com/{repo}/releases/download/{tag}/g-x86_64-apple-darwin"
+                sha256 "{sha_macos_x86_64}"
+
+                def install
+                  bin.install "g-x86_64-apple-darwin" => "g"
+                end
               end
             end
             # END_MACOS
 
             # BEGIN_LINUX
             on_linux do
-              url "https://github.com/%s/releases/download/%s/g-x86_64-unknown-linux-musl"
-              sha256 "%s"
+              url "https://github.com/{repo}/releases/download/{tag}/g-x86_64-unknown-linux-musl"
+              sha256 "{sha_linux}"
 
               def install
                 bin.install "g-x86_64-unknown-linux-musl" => "g"
@@ -245,10 +267,10 @@ jobs:
             # END_LINUX
 
             test do
-              system "#{bin}/g", "--help"
+              system "#{{bin}}/g", "--help"
             end
           end
-          ''' % (version, release_repo, tag, sha_macos, release_repo, tag, sha_linux)
+          '''.format(**v)
 
           with open("Formula/g.rb", "w") as f:
               f.write(content)
