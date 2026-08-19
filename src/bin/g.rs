@@ -45,7 +45,7 @@ fn main() -> Result<()> {
 fn run_getw() -> Result<()> {
     let cwd = std::env::current_dir()?;
     #[cfg(feature = "agents")]
-    let agent = AcpAgentAdapter::new(&cwd);
+    let agent = AcpAgentAdapter::new(&cwd, "g getw");
     #[cfg(feature = "agents")]
     let resolver = Some(&agent as &dyn n7n_g::merge::ConflictResolver);
     #[cfg(not(feature = "agents"))]
@@ -110,7 +110,7 @@ fn run_getw() -> Result<()> {
 fn run_pull(branch: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir()?;
     #[cfg(feature = "agents")]
-    let agent = AcpAgentAdapter::new(&cwd);
+    let agent = AcpAgentAdapter::new(&cwd, "g pull");
     #[cfg(feature = "agents")]
     let resolver = Some(&agent as &dyn n7n_g::merge::ConflictResolver);
     #[cfg(not(feature = "agents"))]
@@ -158,7 +158,7 @@ fn run_pull(branch: Option<&str>) -> Result<()> {
 fn run_ch(args: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     #[cfg(feature = "agents")]
-    let agent = AcpAgentAdapter::new(&cwd);
+    let agent = AcpAgentAdapter::new(&cwd, "g ch");
     #[cfg(feature = "agents")]
     let generator = Some(&agent as &dyn n7n_g::ch::MessageGenerator);
     #[cfg(not(feature = "agents"))]
@@ -216,7 +216,7 @@ fn run_ch(args: &[String]) -> Result<()> {
 fn run_push(branch: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir()?;
     #[cfg(feature = "agents")]
-    let agent = AcpAgentAdapter::new(&cwd);
+    let agent = AcpAgentAdapter::new(&cwd, "g push");
     #[cfg(feature = "agents")]
     let resolver = Some(&agent as &dyn n7n_g::merge::ConflictResolver);
     #[cfg(feature = "agents")]
