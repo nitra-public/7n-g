@@ -1,9 +1,12 @@
 name: Release g
 
 # Патерн перенесено з mt-rust/.github/workflows/release-mt.yml (ADR 20260814-195911):
-# build matrix → Forgejo Release (замість GitHub Release) → оновлення Homebrew tap
-# 7n/homebrew. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі asset-імена
-# (g-<target>) — бінарник називається `g` (скорочено від git), package/crate — n7n-g.
+# build matrix → Forgejo Release (внутрішній, приватний артефакт збірки) →
+# GitHub-сторона (nitra-public/7n-g, .github/workflows/release-macos.yml)
+# перетягує всі асети й публікує СПРАВЖНІЙ публічний GitHub Release +
+# Homebrew tap. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі
+# asset-імена (g-<target>) — бінарник називається `g` (скорочено від git),
+# package/crate — n7n-g.
 #
 # Linux+Windows кросскомпілюються на self-hosted Linux-раннері (двома різними
 # інструментами залежно від таргету, matrix.builder):
@@ -22,12 +25,17 @@ name: Release g
 # macOS будується на GitHub Actions macos-14 (реальний Mac, нативно, без
 # крос-компіляції) — окремий workflow nitra-public/7n-g:
 # .github/workflows/release-macos.yml (mirror цього репо, sync_on_commit).
-# Той GH workflow вивантажує macOS-асет у ЦЕЙ САМИЙ git.7n.ai-реліз і патчить
-# лише секцію on_macos у Formula/g.rb (git.7n.ai/7n/homebrew) — не чіпаючи
-# on_linux, який пише цей workflow. Обидва пайплайни ідемпотентні щодо
-# порядку виконання (кожен створює skeleton-файл, якщо відсутній, і патчить
-# лише свою секцію за BEGIN/END-маркерами).
-
+#
+# ВАЖЛИВО (спостережено 2026-08-19): цей файл більше НЕ пише Formula/g.rb.
+# git.7n.ai — навмисно приватний інстанс
+# (FORGEJO__service__REQUIRE_SIGNIN_VIEW: 'true' в nitra-protected/k8s) —
+# анонімний `brew install`/cargo-binstall на git.7n.ai-релізі отримує
+# редирект на /user/login, а не файл. Публічний дистрибутив (Homebrew tap +
+# фактичні asset-URL у формулі) тепер повністю на боці GitHub
+# (release-macos.yml): той workflow чекає на build-джобу тут, забирає всі
+# три асети (Linux/Windows звідси, macOS зі своєї збірки), публікує їх у
+# СПРАВЖНІЙ публічний GitHub Release і сам пише ОБИДВІ секції формули —
+# єдиний writer, без гонки двох незалежних патчерів, яка була раніше.
 on:
   push:
     tags:
@@ -278,130 +286,3 @@ jobs:
               -H "Authorization: token $TOKEN" -F "attachment=@$f"
           done
 
-  update-homebrew-tap:
-    needs: release
-    # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — той самий label-баг, що
-    # й у build-джобі вище: forgejo-runner-exporter (метрика для KEDA) рахує
-    # лише повний label раннера, "голий" label до scale-up не тригерить.
-    runs-on: ubuntu-latest-amd64
-    steps:
-      - uses: actions/download-artifact@v3
-        with:
-          path: dist
-
-      - name: Compute version and checksum
-        id: meta
-        run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "sha_linux_x64=$(sha256sum dist/g-x86_64-unknown-linux-musl/g-x86_64-unknown-linux-musl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout 7n/homebrew
-        uses: actions/checkout@v4
-        with:
-          repository: 7n/homebrew
-          token: ${{ secrets.HOMEBREW_TAP_PAT }}
-          path: tap
-
-      # Патчить ЛИШЕ секцію on_linux за BEGIN_LINUX/END_LINUX-маркерами, не
-      # чіпаючи on_macos — той пише окремий GitHub Actions workflow
-      # (nitra-public/7n-g, macos-14), НЕЗАЛЕЖНО й ПАРАЛЕЛЬНО (обидва
-      # тригеряться тим самим tag push). Тому просте clone→patch→commit→push
-      # (без ретраю) реально гонить у non-fast-forward-реджект: другий
-      # push бачить застарілий base, git його відхиляє — спостережено
-      # 2026-08-18 (linux-секція мовчки лишилась odie-заглушкою, бо
-      # forgejo-side push програв гонку GitHub-side push, а провал самого
-      # push, схоже, не зупиняв job — тож тепер явний ретрай-цикл із
-      # переклонуванням на кожній спробі, ідемпотентно). Якщо файл ще не в
-      # новому форматі (немає BEGIN_LINUX-маркера — старіший full-overwrite
-      # формат теж траплявся), перезаписуємо skeleton. Чистий sed/awk, без
-      # python3 — частина варіантів self-hosted "ubuntu-latest"-образу його
-      # не мають ("python3: command not found", спостережено 2026-08-18).
-      - name: Update formula and push (on_linux section only, retry on race)
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          SHA_LINUX: ${{ steps.meta.outputs.sha_linux_x64 }}
-          TAG: ${{ github.ref_name }}
-        working-directory: tap
-        run: |
-          set -euo pipefail
-          git config user.name "forgejo-actions"
-          git config user.email "forgejo-actions@git.7n.ai"
-
-          FORMULA="Formula/g.rb"
-          success=0
-          for attempt in 1 2 3 4 5; do
-            if [ "$attempt" -gt 1 ]; then
-              echo "retry $attempt: re-fetching latest main"
-              git fetch origin main
-              git reset --hard origin/main
-              sleep $((attempt * 3))
-            fi
-
-            if [ ! -f "$FORMULA" ] || ! grep -q '# BEGIN_LINUX' "$FORMULA"; then
-              mkdir -p "$(dirname "$FORMULA")"
-              cat > "$FORMULA" <<'RUBYEOF'
-          class G < Formula
-            desc "g CLI — git-дельта інструмент @7n/n (скорочено від git; репо git.7n.ai/7n/g)"
-            homepage "https://git.7n.ai/7n/g"
-            version "0.0.0"
-            license "ISC"
-
-            # BEGIN_MACOS
-            on_macos do
-              odie "g: macOS build not yet published for this version"
-            end
-            # END_MACOS
-
-            # BEGIN_LINUX
-            on_linux do
-              odie "g: Linux build not yet published for this version"
-            end
-            # END_LINUX
-
-            test do
-              system "#{bin}/g", "--help"
-            end
-          end
-          RUBYEOF
-            fi
-
-            sed -i.bak "s/version \"[^\"]*\"/version \"${VERSION}\"/" "$FORMULA" && rm -f "$FORMULA.bak"
-
-            awk -v tag="$TAG" -v sha="$SHA_LINUX" '
-              /# BEGIN_LINUX/ {
-                print "  # BEGIN_LINUX"
-                print "  on_linux do"
-                print "    url \"https://git.7n.ai/7n/g/releases/download/" tag "/g-x86_64-unknown-linux-musl\""
-                print "    sha256 \"" sha "\""
-                print ""
-                print "    def install"
-                print "      bin.install \"g-x86_64-unknown-linux-musl\" => \"g\""
-                print "    end"
-                print "  end"
-                print "  # END_LINUX"
-                skip=1
-                next
-              }
-              /# END_LINUX/ { skip=0; next }
-              skip { next }
-              { print }
-            ' "$FORMULA" > "$FORMULA.tmp" && mv "$FORMULA.tmp" "$FORMULA"
-
-            git add "$FORMULA"
-            if git diff --cached --quiet; then
-              echo "Formula already up to date"
-              success=1
-              break
-            fi
-            git commit -m "g ${VERSION}"
-            if git push; then
-              success=1
-              break
-            fi
-            echo "push rejected (attempt $attempt), will retry"
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "::error::failed to push Formula/g.rb after retries"
-            exit 1
-          fi
