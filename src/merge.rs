@@ -179,17 +179,11 @@ fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
 /// `git show <ref>:<path>` — `None`, якщо шлях не існує на цьому ref (типово для
 /// новостворених/видалених файлів; JS-еквівалент: `git show ... 2>/dev/null || : > tmp`).
 fn show(cwd: &Path, git_ref: &str, rel: &str) -> Result<Option<Vec<u8>>> {
-    let out = run_git(cwd, &["show", &format!("{git_ref}:{rel}")])?;
-    if out.status.success() {
-        Ok(Some(out.stdout))
-    } else {
-        Ok(None)
-    }
+    Ok(crate::gix_util::read_blob_at(cwd, git_ref, rel))
 }
 
 fn file_exists_at(cwd: &Path, git_ref: &str, rel: &str) -> Result<bool> {
-    let out = run_git(cwd, &["cat-file", "-e", &format!("{git_ref}:{rel}")])?;
-    Ok(out.status.success())
+    Ok(crate::gix_util::path_exists_at(cwd, git_ref, rel))
 }
 
 /// Еквівалент `_n7merge_bun_lock_differs`: порівнює кореневий `bun.lock` поточної
@@ -261,7 +255,7 @@ pub fn delta_merge(
         outcome.backup_stash_sha = Some(sha);
     }
 
-    let merge_base = git_ok(cwd, &["merge-base", ours, src])?.trim().to_string();
+    let merge_base = crate::gix_util::merge_base(cwd, ours, src).ok_or_else(|| NError::Message(format!("немає спільного предка для {ours} і {src}")))?;
 
     // --no-renames: rename = delete(old)+add(new), обидва кейси покриті циклом нижче.
     let changed_files: Vec<String> = git_ok(

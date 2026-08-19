@@ -146,13 +146,12 @@ pub fn run(
     let branch = match branch {
         Some(b) if !b.is_empty() => b.to_string(),
         _ => {
-            let current = git_ok(cwd, &["branch", "--show-current"])?;
-            if current.is_empty() {
+            let Some(current) = crate::gix_util::current_branch(cwd) else {
                 return Err(NError::Message(
                     "Не вдалося визначити гілку (detached HEAD?). Вкажи явно: g push <branch>"
                         .into(),
                 ));
-            }
+            };
             current
         }
     };
@@ -162,15 +161,11 @@ pub fn run(
     let _ = run_git(cwd, &["fetch", "origin", &branch]);
 
     let remote_ref = format!("origin/{branch}");
-    let remote_exists = run_git(cwd, &["rev-parse", "--verify", "--quiet", &remote_ref])?
-        .status
-        .success();
+    let remote_exists = crate::gix_util::rev_parse(cwd, &remote_ref).is_some();
 
     let mut auto_pulled = None;
     let (base, base_is_remote_branch) = if remote_exists {
-        let is_ancestor = run_git(cwd, &["merge-base", "--is-ancestor", &remote_ref, "HEAD"])?
-            .status
-            .success();
+        let is_ancestor = crate::gix_util::is_ancestor(cwd, &remote_ref, "HEAD");
         if !is_ancestor {
             let merge = delta_merge(
                 DeltaMergeOpts {
@@ -195,14 +190,8 @@ pub fn run(
         let default_ref = git_ok(cwd, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).ok();
         let mut base = None;
         if let Some(dref) = &default_ref {
-            if !dref.is_empty()
-                && run_git(cwd, &["rev-parse", "--verify", "--quiet", dref])?
-                    .status
-                    .success()
-            {
-                base = git_ok(cwd, &["merge-base", "HEAD", dref])
-                    .ok()
-                    .filter(|s| !s.is_empty());
+            if !dref.is_empty() && crate::gix_util::rev_parse(cwd, dref).is_some() {
+                base = crate::gix_util::merge_base(cwd, "HEAD", dref).filter(|s| !s.is_empty());
             }
         }
         let base = match base {

@@ -115,13 +115,10 @@ fn delta_is_empty(wt_path: &Path, wt_branch: &str, base_branch: &str) -> Result<
     if !String::from_utf8_lossy(&status.stdout).trim().is_empty() {
         return Ok(false);
     }
-    let mb = run_git(wt_path, &["merge-base", base_branch, wt_branch])?;
-    let merge_base = String::from_utf8_lossy(&mb.stdout).trim().to_string();
-    if merge_base.is_empty() {
+    let Some(merge_base) = crate::gix_util::merge_base(wt_path, base_branch, wt_branch) else {
         return Ok(false);
-    }
-    let diff = run_git(wt_path, &["diff", "--quiet", &merge_base, wt_branch])?;
-    Ok(diff.status.success())
+    };
+    Ok(!crate::gix_util::trees_differ(wt_path, &merge_base, wt_branch))
 }
 
 fn task_description(md_path: &Path) -> Option<String> {
@@ -198,7 +195,7 @@ fn newest_file_mtime(dir: &Path) -> Option<std::time::SystemTime> {
 /// Будує список worktree-кандидатів під `.worktrees/`, попутно прибираючи ті з
 /// порожньою дельтою (worktree + гілка видаляються мовчки, у результат не потрапляють).
 pub fn discover(cwd: &Path) -> Result<DiscoverOutcome> {
-    let current_branch = git_ok(cwd, &["branch", "--show-current"])?;
+    let current_branch = crate::gix_util::current_branch(cwd).unwrap_or_default();
     let list = git_ok(cwd, &["worktree", "list"])?;
 
     let mut outcome = DiscoverOutcome::default();
@@ -255,7 +252,7 @@ pub fn run(
         return Err(NError::Message("Ви не в Git репозиторії.".into()));
     }
 
-    let current_branch = git_ok(cwd, &["branch", "--show-current"])?;
+    let current_branch = crate::gix_util::current_branch(cwd).unwrap_or_default();
     let discovered = discover(cwd)?;
 
     if discovered.candidates.is_empty() && discovered.pruned.is_empty() {
