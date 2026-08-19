@@ -18,7 +18,7 @@ use std::io::{self, Write};
 use crossterm::cursor::MoveTo;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use crossterm::tty::IsTty;
 use crossterm::{execute, queue, style};
@@ -74,7 +74,7 @@ impl WorktreePicker for TuiPicker {
             match key.code {
                 KeyCode::Esc => return Ok(None),
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return Ok(None)
+                    return Ok(None);
                 }
                 KeyCode::Enter => {
                     return Ok(filtered.get(selected).map(|&idx| &candidates[idx]));

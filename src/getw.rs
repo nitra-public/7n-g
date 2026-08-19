@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use crate::merge::{delta_merge, ConflictResolver, DeltaMergeOpts, DeltaMergeOutcome};
+use crate::merge::{ConflictResolver, DeltaMergeOpts, DeltaMergeOutcome, delta_merge};
 use crate::{NError, Result};
 
 #[derive(Debug, Clone)]

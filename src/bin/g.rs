@@ -6,7 +6,7 @@ use n7n_g::getw::GetwOutcome;
 use n7n_g::pull::PullOutcome;
 use n7n_g::push::PushOutcome;
 use n7n_g::tui_picker::TuiPicker;
-use n7n_g::{ch, getw, pull, push, NError, Result};
+use n7n_g::{NError, Result, ch, getw, pull, push};
 
 #[derive(Parser)]
 #[command(name = "g", version, about = "g — git-дельта CLI (getw/pull/push/ch)")]
@@ -98,7 +98,9 @@ fn run_getw() -> Result<()> {
             println!("   Tier 2 (mergiraf): {} файл(ів)", merge.tier2);
             println!("   Tier 3 (LLM):      {} файл(ів)", merge.tier3.len());
             if worktree_deleted {
-                println!("✅ Успішно! Зміни перенесено, ворктрі {target_branch} видалено. Роботу завершено! 🚀");
+                println!(
+                    "✅ Успішно! Зміни перенесено, ворктрі {target_branch} видалено. Роботу завершено! 🚀"
+                );
             } else {
                 println!("⚠️ Зміни перенесено, але не вдалося видалити worktree {target_branch}.");
             }
@@ -139,7 +141,9 @@ fn run_pull(branch: Option<&str>) -> Result<()> {
             println!("   Tier 2 (mergiraf): {} файл(ів)", merge.tier2);
             println!("   Tier 3 (LLM):      {} файл(ів)", merge.tier3.len());
             if merge.is_clean() {
-                println!("✅ Готово! HEAD на origin, локальну роботу накладено як unstaged — переглянь і закоміть. 🚀");
+                println!(
+                    "✅ Готово! HEAD на origin, локальну роботу накладено як unstaged — переглянь і закоміть. 🚀"
+                );
                 Ok(())
             } else {
                 println!("❌ Лишилися конфліктні маркери:");
