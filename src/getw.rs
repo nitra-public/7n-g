@@ -214,7 +214,7 @@ pub fn discover(cwd: &Path) -> Result<DiscoverOutcome> {
                         cwd,
                         &["worktree", "remove", "-f", &wt_path.to_string_lossy()],
                     );
-                    let _ = run_git(cwd, &["branch", "-D", branch]);
+                    let _ = crate::gix_util::delete_branch(cwd, branch);
                     outcome.pruned.push(PrunedWorktree {
                         path: wt_path,
                         branch: branch.clone(),
@@ -313,7 +313,11 @@ pub fn run(
         ],
     )?;
     let worktree_deleted = if removed.status.success() {
-        run_git(cwd, &["branch", "-D", &target_branch])?;
+        if !crate::gix_util::delete_branch(cwd, &target_branch) {
+            return Err(NError::Message(format!(
+                "Не вдалося видалити гілку {target_branch}."
+            )));
+        }
         true
     } else {
         false

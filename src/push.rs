@@ -187,7 +187,7 @@ pub fn run(
         }
         (remote_ref.clone(), true)
     } else {
-        let default_ref = git_ok(cwd, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).ok();
+        let default_ref = crate::gix_util::default_remote_branch(cwd, "origin");
         let mut base = None;
         if let Some(dref) = &default_ref {
             if !dref.is_empty() && crate::gix_util::rev_parse(cwd, dref).is_some() {
@@ -196,19 +196,15 @@ pub fn run(
         }
         let base = match base {
             Some(b) => b,
-            None => {
-                let roots = git_ok(cwd, &["rev-list", "--max-parents=0", "HEAD"])?;
-                roots.lines().last().unwrap_or_default().to_string()
-            }
+            None => crate::gix_util::root_commit(cwd)
+                .ok_or_else(|| NError::Message("Не вдалося визначити кореневий коміт.".into()))?,
         };
         (base, false)
     };
 
     run_git(cwd, &["add", "-A"])?;
 
-    let no_changes = run_git(cwd, &["diff", "--cached", "--quiet", &base, "--"])?
-        .status
-        .success();
+    let no_changes = !crate::gix_util::index_differs_from_tree(cwd, &base);
     if no_changes {
         return Ok(PushOutcome::NothingToPush { base });
     }

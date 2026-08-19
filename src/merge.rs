@@ -165,17 +165,6 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Output> {
         .map_err(NError::Io)
 }
 
-fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
-    let out = run_git(cwd, args)?;
-    if !out.status.success() {
-        return Err(NError::GitCommand {
-            args: args.join(" "),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        });
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
 /// `git show <ref>:<path>` — `None`, якщо шлях не існує на цьому ref (типово для
 /// новостворених/видалених файлів; JS-еквівалент: `git show ... 2>/dev/null || : > tmp`).
 fn show(cwd: &Path, git_ref: &str, rel: &str) -> Result<Option<Vec<u8>>> {
@@ -258,14 +247,7 @@ pub fn delta_merge(
     let merge_base = crate::gix_util::merge_base(cwd, ours, src).ok_or_else(|| NError::Message(format!("немає спільного предка для {ours} і {src}")))?;
 
     // --no-renames: rename = delete(old)+add(new), обидва кейси покриті циклом нижче.
-    let changed_files: Vec<String> = git_ok(
-        cwd,
-        &["diff", "--no-renames", "--name-only", &merge_base, src],
-    )?
-    .lines()
-    .filter(|l| !l.is_empty())
-    .map(str::to_string)
-    .collect();
+    let changed_files = crate::gix_util::changed_paths(cwd, &merge_base, src);
     outcome.total_files = changed_files.len();
 
     let patch = run_git(cwd, &["diff", "--binary", &merge_base, src])?.stdout;

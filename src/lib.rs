@@ -153,4 +153,110 @@ pub mod gix_util {
         });
         differs
     }
+
+    fn commit_tree<'r>(repo: &'r gix::Repository, rev: &str) -> Option<gix::Tree<'r>> {
+        repo.rev_parse_single(rev)
+            .ok()?
+            .object()
+            .ok()?
+            .try_into_commit()
+            .ok()?
+            .tree()
+            .ok()
+    }
+
+    /// Еквівалент `git diff --no-renames --name-only <a> <b>`: список шляхів, що
+    /// відрізняються між деревами двох ревізій (додано/видалено/змінено; rename
+    /// трактується як delete+add, як і в оригіналі з `--no-renames`).
+    pub fn changed_paths(cwd: &Path, a: &str, b: &str) -> Vec<String> {
+        let Some(repo) = gix::discover(cwd).ok() else {
+            return Vec::new();
+        };
+        let (Some(tree_a), Some(tree_b)) = (commit_tree(&repo, a), commit_tree(&repo, b)) else {
+            return Vec::new();
+        };
+        let mut paths = Vec::new();
+        let Ok(mut platform) = tree_a.changes() else {
+            return Vec::new();
+        };
+        let _ = platform.for_each_to_obtain_tree(&tree_b, |change| {
+            if !change.entry_mode().is_tree() {
+                paths.push(change.location().to_string());
+            }
+            Ok::<_, std::convert::Infallible>(gix::object::tree::diff::Action::Continue)
+        });
+        paths
+    }
+
+    /// Еквівалент `git rev-parse --show-toplevel`: завжди абсолютний шлях,
+    /// незалежно від того, відносним чи абсолютним був `cwd`.
+    pub fn show_toplevel(cwd: &Path) -> Option<std::path::PathBuf> {
+        let dir = gix::discover(cwd).ok()?.work_dir()?.to_path_buf();
+        Some(dir.canonicalize().unwrap_or(dir))
+    }
+
+    /// Еквівалент `git branch -D <name>`: `true`, якщо ref видалено. Best-effort,
+    /// як і оригінальні виклики (їхні результати ігноруються `let _ =`).
+    pub fn delete_branch(cwd: &Path, name: &str) -> bool {
+        let Some(repo) = gix::discover(cwd).ok() else {
+            return false;
+        };
+        let Ok(r) = repo.find_reference(format!("refs/heads/{name}").as_str()) else {
+            return false;
+        };
+        r.delete().is_ok()
+    }
+
+    /// Еквівалент `git rev-parse --abbrev-ref origin/HEAD`: `"<remote>/<branch>"`,
+    /// або `None`, якщо символічний ref не налаштований (типово для щойно
+    /// клонованого repo без `git remote set-head`).
+    pub fn default_remote_branch(cwd: &Path, remote: &str) -> Option<String> {
+        let repo = gix::discover(cwd).ok()?;
+        let r = repo
+            .find_reference(format!("refs/remotes/{remote}/HEAD").as_str())
+            .ok()?;
+        let target = r.target();
+        let name = target.try_name()?;
+        let s = name.as_bstr().strip_prefix(b"refs/remotes/")?;
+        std::str::from_utf8(s).ok().map(str::to_string)
+    }
+
+    /// Еквівалент `git diff --cached --quiet <base> --` (лише булевий факт
+    /// наявності різниці між індексом і деревом `base`, без побудови самого
+    /// патчу чи переліку файлів). `false`, якщо `base` не резолвиться.
+    pub fn index_differs_from_tree(cwd: &Path, base: &str) -> bool {
+        let Some(repo) = gix::discover(cwd).ok() else {
+            return false;
+        };
+        let Some(tree_id) = commit_tree(&repo, base).map(|t| t.id().detach()) else {
+            return false;
+        };
+        let Ok(index) = repo.index_or_empty() else {
+            return false;
+        };
+        let mut differs = false;
+        let outcome = repo.tree_index_status(
+            &tree_id,
+            &index,
+            None,
+            gix::status::tree_index::TrackRenames::Disabled,
+            |_change, _tree_index, _worktree_index| {
+                differs = true;
+                Ok::<_, std::convert::Infallible>(gix::diff::index::Action::Cancel)
+            },
+        );
+        outcome.is_ok() && differs
+    }
+
+    /// Еквівалент `git rev-list --max-parents=0 HEAD` (перший рядок): sha
+    /// найдавнішого предка `HEAD` (кореневий коміт).
+    pub fn root_commit(cwd: &Path) -> Option<String> {
+        let repo = gix::discover(cwd).ok()?;
+        let head = repo.rev_parse_single("HEAD").ok()?;
+        let mut root = head.detach();
+        for info in head.ancestors().all().ok()?.flatten() {
+            root = info.id;
+        }
+        Some(root.to_hex().to_string())
+    }
 }
