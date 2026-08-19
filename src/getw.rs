@@ -99,8 +99,7 @@ fn git_ok(cwd: &Path, args: &[&str]) -> Result<String> {
 /// worktree, є визначений `merge-base`, і немає діффу `merge-base..wt_branch`. При
 /// невизначеному `merge-base` — `false` (не чіпати те, що не змогли оцінити).
 fn delta_is_empty(wt_path: &Path, wt_branch: &str, base_branch: &str) -> Result<bool> {
-    let status = run_git(wt_path, &["status", "--porcelain"])?;
-    if !String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+    if crate::gix_util::worktree_is_dirty(wt_path) {
         return Ok(false);
     }
     let Some(merge_base) = crate::gix_util::merge_base(wt_path, base_branch, wt_branch) else {
@@ -262,8 +261,7 @@ pub fn run(
 
     // Тимчасовий коміт незакомічених змін у worktree (щоб delta_merge бачив їх у гілці).
     run_git(&target_wt_path, &["add", "-A"])?;
-    let staged = run_git(&target_wt_path, &["diff", "--cached", "--quiet"])?;
-    if !staged.status.success() {
+    if crate::gix_util::index_differs_from_tree(&target_wt_path, "HEAD") {
         run_git(
             &target_wt_path,
             &["commit", "-m", "temp_merge_before_pull", "--no-verify"],

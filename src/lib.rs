@@ -285,4 +285,22 @@ pub mod gix_util {
             })
             .collect()
     }
+
+    /// Еквівалент "чи `git status --porcelain` дав би непорожній вивід" — на
+    /// відміну від `repo.is_dirty()` з gix (яка свідомо ІГНОРУЄ untracked-файли),
+    /// тут враховано і їх, як і в реальному `git status --porcelain` за
+    /// замовчуванням — важливо, бо виклики цієї функції вирішують, чи можна
+    /// безпечно видалити worktree.
+    pub fn worktree_is_dirty(cwd: &Path) -> bool {
+        let Some(repo) = gix::discover(cwd).ok() else {
+            return false;
+        };
+        let Ok(status) = repo.status(gix::progress::Discard) else {
+            return false;
+        };
+        let Ok(mut iter) = status.into_iter(None) else {
+            return false;
+        };
+        iter.next().is_some()
+    }
 }
