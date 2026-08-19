@@ -229,7 +229,10 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — той самий label-баг, що
+    # й у build-джобі вище: forgejo-runner-exporter (метрика для KEDA) рахує
+    # лише повний label раннера, "голий" label до scale-up не тригерить.
+    runs-on: ubuntu-latest-amd64
     steps:
       - uses: actions/download-artifact@v3
         with:
@@ -277,7 +280,10 @@ jobs:
 
   update-homebrew-tap:
     needs: release
-    runs-on: ubuntu-latest
+    # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — той самий label-баг, що
+    # й у build-джобі вище: forgejo-runner-exporter (метрика для KEDA) рахує
+    # лише повний label раннера, "голий" label до scale-up не тригерить.
+    runs-on: ubuntu-latest-amd64
     steps:
       - uses: actions/download-artifact@v3
         with:

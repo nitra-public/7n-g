@@ -7,7 +7,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — forgejo-runner-exporter
+    # (метрика для KEDA) рахує лише повний label раннера; голий label не
+    # тригерить scale-up, коли немає іншого трафіку, що тримає под живим.
+    runs-on: ubuntu-latest-amd64
     steps:
       - uses: actions/checkout@v4
       # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
