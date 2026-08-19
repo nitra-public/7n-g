@@ -244,7 +244,8 @@ pub fn delta_merge(
         outcome.backup_stash_sha = Some(sha);
     }
 
-    let merge_base = crate::gix_util::merge_base(cwd, ours, src).ok_or_else(|| NError::Message(format!("немає спільного предка для {ours} і {src}")))?;
+    let merge_base = crate::gix_util::merge_base(cwd, ours, src)
+        .ok_or_else(|| NError::Message(format!("немає спільного предка для {ours} і {src}")))?;
 
     // --no-renames: rename = delete(old)+add(new), обидва кейси покриті циклом нижче.
     let changed_files = crate::gix_util::changed_paths(cwd, &merge_base, src);
@@ -765,7 +766,10 @@ mod tests {
         git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
         write(dir.path(), "bun.lock", "from-ours\n");
         git(dir.path(), &["add", "-A"]);
-        git(dir.path(), &["commit", "-q", "-m", "ours changes bun.lock differently"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "-m", "ours changes bun.lock differently"],
+        );
 
         let outcome = delta_merge(
             DeltaMergeOpts {
@@ -806,7 +810,12 @@ mod tests {
         git(dir.path(), &["add", "-A"]);
         git(
             dir.path(),
-            &["commit", "-q", "-m", "ours independently converges to same lock"],
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "ours independently converges to same lock",
+            ],
         );
 
         let outcome = delta_merge(
@@ -840,7 +849,10 @@ mod tests {
         git(dir.path(), &["checkout", "-q", "-b", "src-branch"]);
         write(dir.path(), "sub/bun.lock", "line1\nline2-src\nline3\n");
         git(dir.path(), &["add", "-A"]);
-        git(dir.path(), &["commit", "-q", "-m", "src changes nested bun.lock"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "-m", "src changes nested bun.lock"],
+        );
 
         git(dir.path(), &["checkout", "-q", "-b", "ours-branch", "main"]);
         write(dir.path(), "sub/bun.lock", "line1\nline2-ours\nline3\n");

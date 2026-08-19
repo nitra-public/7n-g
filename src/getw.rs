@@ -106,7 +106,11 @@ fn delta_is_empty(wt_path: &Path, wt_branch: &str, base_branch: &str) -> Result<
     let Some(merge_base) = crate::gix_util::merge_base(wt_path, base_branch, wt_branch) else {
         return Ok(false);
     };
-    Ok(!crate::gix_util::trees_differ(wt_path, &merge_base, wt_branch))
+    Ok(!crate::gix_util::trees_differ(
+        wt_path,
+        &merge_base,
+        wt_branch,
+    ))
 }
 
 fn task_description(md_path: &Path) -> Option<String> {
