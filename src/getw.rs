@@ -10,9 +10,10 @@
 //!
 //! **Відмінність від zsh-оригіналу**: інтерактивний вибір — injectable
 //! [`WorktreePicker`] (за ADR 20260814-195911: нативний TUI fuzzy-picker замість
-//! `fzf`-бінарника, ще не реалізований — це seam для нього, аналогічний
-//! [`crate::merge::ConflictResolver`] для Tier 3). Бібліотека тому НЕ ставить `fzf`
-//! через `brew` (auto-install — відповідальність CLI-шару, не переюзовуваного crate).
+//! `fzf`-бінарника — seam, аналогічний [`crate::merge::ConflictResolver`] для
+//! Tier 3; реалізація — [`crate::tui_picker::TuiPicker`]). Бібліотека тому НЕ
+//! ставить `fzf` через `brew` (це взагалі не потрібно — picker нативний,
+//! in-process).
 //! Формат `created`/`modified` — крос-платформний (`chrono`, локальний час) замість
 //! macOS-специфічного `stat -f`/`date -r` з JS-оригіналу.
 
