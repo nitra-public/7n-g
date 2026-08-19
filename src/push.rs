@@ -189,10 +189,11 @@ pub fn run(
     } else {
         let default_ref = crate::gix_util::default_remote_branch(cwd, "origin");
         let mut base = None;
-        if let Some(dref) = &default_ref {
-            if !dref.is_empty() && crate::gix_util::rev_parse(cwd, dref).is_some() {
-                base = crate::gix_util::merge_base(cwd, "HEAD", dref).filter(|s| !s.is_empty());
-            }
+        if let Some(dref) = &default_ref
+            && !dref.is_empty()
+            && crate::gix_util::rev_parse(cwd, dref).is_some()
+        {
+            base = crate::gix_util::merge_base(cwd, "HEAD", dref).filter(|s| !s.is_empty());
         }
         let base = match base {
             Some(b) => b,
@@ -289,12 +290,12 @@ fn generate_llm_message(
     generator: Option<&dyn CommitMessageGenerator>,
 ) -> Result<(String, MessageSource)> {
     let context = build_diff_context(cwd, base, changes_list);
-    let Some(gen) = generator else {
+    let Some(generator) = generator else {
         return Err(NError::Message(
             "Немає change-файлів і не підключено генератор commit-меседжу (CommitMessageGenerator) — ACP/llm-lib ще не підключено.".into(),
         ));
     };
-    let message = gen
+    let message = generator
         .generate(&context)
         .map_err(|e| NError::Message(format!("Не вдалося згенерувати commit-меседж: {e}")))?;
     Ok((message, MessageSource::Llm))
@@ -860,8 +861,8 @@ mod tests {
         let (_upstream, local) = init_upstream_and_clone();
         write(local.path(), "src/plain.txt", "no change file here\n");
 
-        let gen = StubGenerator("✨ feat(src): щось нове\n\n- деталь");
-        let outcome = run(local.path(), None, None, Some(&gen)).unwrap();
+        let generator = StubGenerator("✨ feat(src): щось нове\n\n- деталь");
+        let outcome = run(local.path(), None, None, Some(&generator)).unwrap();
         match outcome {
             PushOutcome::Done {
                 subject,

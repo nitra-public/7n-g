@@ -170,14 +170,12 @@ fn newest_file_mtime(dir: &Path) -> Option<std::time::SystemTime> {
             };
             if file_type.is_dir() {
                 stack.push(path);
-            } else if file_type.is_file() {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(mtime) = meta.modified() {
-                        if newest.is_none_or(|n| mtime > n) {
-                            newest = Some(mtime);
-                        }
-                    }
-                }
+            } else if file_type.is_file()
+                && let Ok(meta) = entry.metadata()
+                && let Ok(mtime) = meta.modified()
+                && newest.is_none_or(|n| mtime > n)
+            {
+                newest = Some(mtime);
             }
         }
     }
@@ -196,21 +194,20 @@ pub fn discover(cwd: &Path) -> Result<DiscoverOutcome> {
             continue;
         }
 
-        if wt_path != cwd {
-            if let Some(branch) = &branch {
-                if delta_is_empty(&wt_path, branch, &current_branch)? {
-                    let _ = run_git(
-                        cwd,
-                        &["worktree", "remove", "-f", &wt_path.to_string_lossy()],
-                    );
-                    let _ = crate::gix_util::delete_branch(cwd, branch);
-                    outcome.pruned.push(PrunedWorktree {
-                        path: wt_path,
-                        branch: branch.clone(),
-                    });
-                    continue;
-                }
-            }
+        if wt_path != cwd
+            && let Some(branch) = &branch
+            && delta_is_empty(&wt_path, branch, &current_branch)?
+        {
+            let _ = run_git(
+                cwd,
+                &["worktree", "remove", "-f", &wt_path.to_string_lossy()],
+            );
+            let _ = crate::gix_util::delete_branch(cwd, branch);
+            outcome.pruned.push(PrunedWorktree {
+                path: wt_path,
+                branch: branch.clone(),
+            });
+            continue;
         }
 
         let name = wt_path

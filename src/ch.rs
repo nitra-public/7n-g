@@ -477,10 +477,10 @@ pub fn run(
     generator: Option<&dyn MessageGenerator>,
 ) -> Result<ChReport> {
     let partial = parse_ch_args(argv);
-    if let Some(m) = &partial.message {
-        if m.trim().is_empty() {
-            return Err(NError::Message(format!("Порожній --message.\n{USAGE}")));
-        }
+    if let Some(m) = &partial.message
+        && m.trim().is_empty()
+    {
+        return Err(NError::Message(format!("Порожній --message.\n{USAGE}")));
     }
 
     let ctx = git_context(cwd)?;
@@ -515,7 +515,7 @@ pub fn run(
         let message = match &partial.message {
             Some(m) => m.clone(),
             None => {
-                let Some(gen) = generator else {
+                let Some(generator) = generator else {
                     failures.push(ChFailure {
                         ws: group.ws.clone(),
                         reason:
@@ -524,7 +524,7 @@ pub fn run(
                     });
                     continue;
                 };
-                match gen.generate(&group.ws, &group.files, &ctx.repo_root) {
+                match generator.generate(&group.ws, &group.files, &ctx.repo_root) {
                     Ok(m) if !m.trim().is_empty() => m,
                     Ok(_) => {
                         failures.push(ChFailure {
