@@ -70,20 +70,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Тимчасова діагностика: actions/cache@v4/v6 мовчки no-opляться саме на
-      # tauri-раннері з "GHES version >= 3.5" (спостережено 2026-08-18) —
-      # конфіг раннера (cache.actions_cache_url_override) не label-специфічний,
-      # тож перевіряємо, чи ACTIONS_CACHE_URL взагалі проставлений і доступний
-      # ЗСЕРЕДИНИ реального job-контейнера на цьому образі.
-      - name: DEBUG cache env/reachability
-        run: |
-          echo "ACTIONS_CACHE_URL=${ACTIONS_CACHE_URL:-<unset>}"
-          echo "ACTIONS_RUNTIME_URL=${ACTIONS_RUNTIME_URL:-<unset>}"
-          echo "ACTIONS_RESULTS_URL=${ACTIONS_RESULTS_URL:-<unset>}"
-          if [ -n "${ACTIONS_CACHE_URL:-}" ]; then
-            curl -sv -m 5 "$ACTIONS_CACHE_URL" 2>&1 | head -20 || true
-          fi
-
       # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
       # self-hosted runner-образу з несумісними дефектами — одні без curl, одні без
       # writable $HOME, і невідомо заздалегідь, чи є sudo (є не на всіх). $SUDO —
