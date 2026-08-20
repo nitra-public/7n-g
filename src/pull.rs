@@ -18,10 +18,10 @@
 
 use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::merge::{delta_merge, ConflictResolver, DeltaMergeOpts, DeltaMergeOutcome};
+use crate::merge::{ConflictResolver, DeltaMergeOpts, DeltaMergeOutcome, delta_merge};
 use crate::{NError, Result};
 
 #[derive(Debug)]

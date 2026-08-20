@@ -49,8 +49,8 @@ use llm_lib::acp::AcpAgentKind;
 use llm_lib::budget::{self, EgressPolicy};
 use llm_lib::calibration::{self, ModelFingerprint};
 use llm_lib::cascade::{self, LocalForecastInput, Rung};
-use llm_lib::local_cloud::{default_local_openai_provider, LocalCloud};
-use llm_lib::local_lease::{cascade_lease_fn, LeaseMeta};
+use llm_lib::local_cloud::{LocalCloud, default_local_openai_provider};
+use llm_lib::local_lease::{LeaseMeta, cascade_lease_fn};
 
 use crate::{ch, merge, push};
 

@@ -32,7 +32,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use crate::diff_context::{self, DEFAULT_LIMITS};
-use crate::merge::{delta_merge, ConflictResolver, DeltaMergeOpts, DeltaMergeOutcome};
+use crate::merge::{ConflictResolver, DeltaMergeOpts, DeltaMergeOutcome, delta_merge};
 use crate::{NError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -264,7 +264,9 @@ pub fn run(
     };
     if !push_out.status.success() {
         let hint = if base_is_remote_branch {
-            format!("git push не вдався (можливо, origin/{branch} знову оновився — зроби g push ще раз).")
+            format!(
+                "git push не вдався (можливо, origin/{branch} знову оновився — зроби g push ще раз)."
+            )
         } else {
             "git push не вдався.".to_string()
         };
