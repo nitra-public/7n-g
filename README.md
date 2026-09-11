@@ -13,6 +13,11 @@ Rust-переписання `@7n/n` (Bun/JS CLI з монорепо `7n`) — gi
 
 Рішення й обґрунтування: [`docs/adr/20260814-195911-переписати-n-на-rust-для-cargo-binstall.md`](docs/adr/20260814-195911-переписати-n-на-rust-для-cargo-binstall.md).
 
+## Архітектура
+
+Інтерактивна схема компонентів і зв'язків: [`docs/architecture.html`](docs/architecture.html).
+Вихідна специфікація Archify: [`docs/architecture.json`](docs/architecture.json).
+
 ## Статус
 
 `getw`/`push`/`ch` поки повертають `NotPorted` (логіка з JS-оригіналу ще не
@@ -35,6 +40,20 @@ cargo binstall n7n-g   # ставить бінарник `g`
 # або
 brew install 7n/homebrew/g
 ```
+
+## Releases and Homebrew
+
+`vX.Y.Z` creates a draft Forgejo release. Linux and Windows build in Forgejo;
+the GitHub macOS runner uploads Apple Silicon and Intel binaries to that same
+draft. Only after all four assets are present does Forgejo publish them to an
+immutable public Artifact Gateway version, update `7n/homebrew/Formula/g.rb`
+with SHA-256 checksums, and publish the release. Homebrew therefore never
+depends on a private Forgejo download URL or the GitHub mirror.
+
+This needs a Forgejo Authorized Integration `g-release-homebrew` with write
+access to `7n/g` and `7n/homebrew`; store its non-secret audience in repository
+Actions variable `G_RELEASE_AUDIENCE`. The GitHub mirror continues to need only
+`FJ_TOKEN` to upload its macOS assets to the draft release.
 
 ## Приклад
 

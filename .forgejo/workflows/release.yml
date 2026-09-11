@@ -1,12 +1,10 @@
 name: Release g
 
-# Патерн перенесено з mt-rust/.github/workflows/release-mt.yml (ADR 20260814-195911):
-# build matrix → Forgejo Release (внутрішній, приватний артефакт збірки) →
-# GitHub-сторона (nitra-public/7n-g, .github/workflows/release-macos.yml)
-# перетягує всі асети й публікує СПРАВЖНІЙ публічний GitHub Release +
-# Homebrew tap. Прапор cargo-binstall pkg-url у Cargo.toml очікує саме такі
-# asset-імена (g-<target>) — бінарник називається `g` (скорочено від git),
-# package/crate — n7n-g.
+# Linux/Windows are built here and macOS on the GitHub mirror, which contributes
+# its two Apple binaries to this draft Forgejo release. This workflow is the
+# only writer for Artifact Gateway and Formula/g.rb in 7n/homebrew; only then
+# does it publish the Forgejo release. All Homebrew URLs are public immutable
+# Artifact Gateway URLs, never private Forgejo or GitHub mirror download URLs.
 #
 # Linux+Windows кросскомпілюються на self-hosted Linux-раннері (двома різними
 # інструментами залежно від таргету, matrix.builder):
@@ -41,6 +39,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch: {}
+
+# `g-release-homebrew` is a Forgejo Authorized Integration. Its audience is
+# stored in the repository Actions variable G_RELEASE_AUDIENCE.
+enable-openid-connect: true
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
@@ -279,10 +281,136 @@ jobs:
           else
             release_id=$(curl -fsS -X POST "$API/repos/$REPO/releases" \
               -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\"}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":true}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
           fi
           for f in release/*; do
-            curl -fsS -X POST "$API/repos/$REPO/releases/$release_id/assets?name=$(basename "$f")" \
-              -H "Authorization: token $TOKEN" -F "attachment=@$f"
+            response_file="$(mktemp)"
+            status="$(curl --silent --show-error --output "${response_file}" --write-out '%{http_code}' \
+              -X POST "$API/repos/$REPO/releases/$release_id/assets?name=$(basename "$f")" \
+              -H "Authorization: token $TOKEN" -F "attachment=@$f")"
+            if [ "${status}" = 409 ]; then
+              echo "release asset already exists: $(basename "$f")"
+            elif [ "${status}" != 201 ]; then
+              cat "${response_file}" >&2
+              exit 1
+            fi
           done
 
+  update-homebrew:
+    needs: release
+    # The release-arm64 image provides the Artifact Gateway CLI used by foc.
+    runs-on: release-arm64
+    steps:
+      - name: Publish immutable assets and update the Homebrew tap
+        env:
+          API: https://git.7n.ai/api/v1
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          G_RELEASE_AUDIENCE: ${{ vars.G_RELEASE_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          test -n "${G_RELEASE_AUDIENCE}" || { echo "G_RELEASE_AUDIENCE repository variable is required" >&2; exit 1; }
+          jwt="$(curl --fail --silent --show-error --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${G_RELEASE_AUDIENCE}" | jq --raw-output '.value')"
+          test -n "${jwt}" && test "${jwt}" != "null"
+          echo "::add-mask::${jwt}"
+          version="${TAG#v}"
+          assets='g-aarch64-apple-darwin g-x86_64-apple-darwin g-x86_64-unknown-linux-musl g-x86_64-pc-windows-msvc.exe'
+          staging="$(mktemp -d)"
+          trap 'rm -rf "${staging}"' EXIT
+
+          # macOS is uploaded by the mirror workflow to this draft release.
+          release_json="${staging}/release.json"
+          for attempt in $(seq 1 40); do
+            curl --fail --silent --show-error --header "Authorization: Bearer ${jwt}" "${API}/repos/${REPO}/releases/tags/${TAG}" >"${release_json}"
+            missing=0
+            for asset in ${assets}; do
+              jq --exit-status --arg name "${asset}" '.assets | map(select(.name == $name)) | length == 1' "${release_json}" >/dev/null || missing=1
+            done
+            test "${missing}" = 0 && break
+            test "${attempt}" -lt 40 || { echo "release ${TAG} is missing platform assets" >&2; exit 1; }
+            sleep 30
+          done
+
+          for asset in ${assets}; do
+            url="$(jq --raw-output --arg name "${asset}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}")"
+            test -n "${url}" && test "${url}" != "null"
+            curl --fail --location --silent --show-error --header "Authorization: Bearer ${jwt}" --output "${staging}/${asset}" "${url}"
+          done
+          mac_arm_sha="$(shasum -a 256 "${staging}/g-aarch64-apple-darwin" | awk '{print $1}')"
+          mac_x86_sha="$(shasum -a 256 "${staging}/g-x86_64-apple-darwin" | awk '{print $1}')"
+          linux_sha="$(shasum -a 256 "${staging}/g-x86_64-unknown-linux-musl" | awk '{print $1}')"
+          release_uuid="$(artifact uuid)"
+          artifact publish "${staging}" --project g-release --version "${release_uuid}" --public --force
+          release_url="https://7n.ai/artifacts/g-release/${release_uuid}"
+          for asset in ${assets}; do curl --fail --location --silent --show-error --output /dev/null "${release_url}/${asset}"; done
+
+          git -c http.extraHeader="Authorization: Bearer ${jwt}" clone https://git.7n.ai/7n/homebrew.git "${staging}/tap"
+          cd "${staging}/tap"
+          mkdir -p Formula
+          cat > Formula/g.rb <<EOF
+          class G < Formula
+            desc "g CLI - git delta tool"
+            homepage "https://git.7n.ai/7n/g"
+            version "${version}"
+            license "ISC"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${release_url}/g-aarch64-apple-darwin"
+                sha256 "${mac_arm_sha}"
+                def install
+                  bin.install "g-aarch64-apple-darwin" => "g"
+                end
+              else
+                url "${release_url}/g-x86_64-apple-darwin"
+                sha256 "${mac_x86_sha}"
+                def install
+                  bin.install "g-x86_64-apple-darwin" => "g"
+                end
+              end
+            end
+
+            on_linux do
+              url "${release_url}/g-x86_64-unknown-linux-musl"
+              sha256 "${linux_sha}"
+              def install
+                bin.install "g-x86_64-unknown-linux-musl" => "g"
+              end
+            end
+
+            test do
+              system "#{bin}/g", "--help"
+            end
+          end
+          EOF
+          git add Formula/g.rb
+          git diff --cached --check
+          if ! git diff --cached --quiet; then
+            git config user.name "forgejo-actions[bot]"
+            git config user.email "forgejo-actions[bot]@users.noreply.git.7n.ai"
+            git commit -m "g ${version}"
+            git -c http.extraHeader="Authorization: Bearer ${jwt}" push origin HEAD:main
+          fi
+
+  publish-release:
+    needs: update-homebrew
+    # Same image as the artifact publisher: this runner has jq, unlike some
+    # ubuntu-latest-amd64 images used by the legacy release job.
+    runs-on: release-arm64
+    steps:
+      - name: Publish the verified draft release
+        env:
+          API: https://git.7n.ai/api/v1
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          G_RELEASE_AUDIENCE: ${{ vars.G_RELEASE_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          test -n "${G_RELEASE_AUDIENCE}"
+          jwt="$(curl --fail --silent --show-error --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${G_RELEASE_AUDIENCE}" | jq --raw-output '.value')"
+          test -n "${jwt}" && test "${jwt}" != "null"
+          echo "::add-mask::${jwt}"
+          release="$(curl --fail --silent --show-error --header "Authorization: Bearer ${jwt}" "${API}/repos/${REPO}/releases/tags/${TAG}")"
+          id="$(printf '%s' "${release}" | jq --raw-output '.id')"
+          test "${id}" != "null"
+          curl --fail --silent --show-error --request PATCH --header "Authorization: Bearer ${jwt}" --header 'Content-Type: application/json' --data '{"draft":false}' "${API}/repos/${REPO}/releases/${id}"
