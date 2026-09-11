@@ -235,6 +235,8 @@ jobs:
           version="${TAG#v}"
           assets='g-aarch64-apple-darwin g-x86_64-apple-darwin g-x86_64-unknown-linux-musl g-x86_64-pc-windows-msvc.exe'
           staging="$(mktemp -d)"
+          assets_dir="${staging}/assets"
+          mkdir -p "${assets_dir}"
           trap 'rm -rf "${staging}"' EXIT
 
           # macOS is uploaded by the mirror workflow to this draft release.
@@ -253,13 +255,13 @@ jobs:
           for asset in ${assets}; do
             url="$(jq --raw-output --arg name "${asset}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}")"
             test -n "${url}" && test "${url}" != "null"
-            curl --fail --location --silent --show-error --header "Authorization: Bearer ${jwt}" --output "${staging}/${asset}" "${url}"
+            curl --fail --location --silent --show-error --header "Authorization: Bearer ${jwt}" --output "${assets_dir}/${asset}" "${url}"
           done
-          mac_arm_sha="$(shasum -a 256 "${staging}/g-aarch64-apple-darwin" | awk '{print $1}')"
-          mac_x86_sha="$(shasum -a 256 "${staging}/g-x86_64-apple-darwin" | awk '{print $1}')"
-          linux_sha="$(shasum -a 256 "${staging}/g-x86_64-unknown-linux-musl" | awk '{print $1}')"
+          mac_arm_sha="$(shasum -a 256 "${assets_dir}/g-aarch64-apple-darwin" | awk '{print $1}')"
+          mac_x86_sha="$(shasum -a 256 "${assets_dir}/g-x86_64-apple-darwin" | awk '{print $1}')"
+          linux_sha="$(shasum -a 256 "${assets_dir}/g-x86_64-unknown-linux-musl" | awk '{print $1}')"
           release_uuid="$(artifact uuid)"
-          artifact publish "${staging}" --project g-release --version "${release_uuid}" --public --force
+          artifact publish "${assets_dir}" --project g-release --version "${release_uuid}" --public --force
           release_url="https://7n.ai/artifacts/g-release/${release_uuid}"
           for asset in ${assets}; do curl --fail --location --silent --show-error --output /dev/null "${release_url}/${asset}"; done
 
