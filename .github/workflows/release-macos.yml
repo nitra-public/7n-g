@@ -1,8 +1,8 @@
-name: Build g macOS assets
+name: Build g release assets
 
 # The Forgejo fleet cannot build Apple targets because they require a real
-# Apple SDK. This mirror contributes only macOS assets; Forgejo remains the
-# single writer for the public artifact and Homebrew formula.
+# Apple SDK. This mirror contributes native macOS and Windows assets; Forgejo
+# remains the single writer for the public artifact and Homebrew formula.
 on:
   push:
     tags: ['v*']
@@ -60,3 +60,47 @@ jobs:
               exit 1
             fi
           done
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build Windows binary
+        shell: pwsh
+        run: |
+          cargo build --release --locked --target x86_64-pc-windows-msvc --bin g
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/g.exe dist/g-x86_64-pc-windows-msvc.exe
+      - name: Wait for the draft Forgejo release
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $headers = @{ Authorization = "token $env:TOKEN" }
+          for ($attempt = 1; $attempt -le 40; $attempt++) {
+            try {
+              $release = Invoke-RestMethod -Headers $headers -Uri "https://git.7n.ai/api/v1/repos/7n/g/releases/tags/$env:TAG"
+              if ($release.id) {
+                "release_id=$($release.id)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+                exit 0
+              }
+            } catch {}
+            Start-Sleep -Seconds 30
+          }
+          throw "draft Forgejo release did not appear"
+      - name: Upload Windows asset to the draft release
+        shell: pwsh
+        env:
+          TOKEN: ${{ secrets.FJ_TOKEN }}
+        run: |
+          $headers = @{ Authorization = "token $env:TOKEN" }
+          $uri = "https://git.7n.ai/api/v1/repos/7n/g/releases/$env:release_id/assets?name=g-x86_64-pc-windows-msvc.exe"
+          try {
+            Invoke-RestMethod -Method Post -Headers $headers -Form @{ attachment = Get-Item 'dist/g-x86_64-pc-windows-msvc.exe' } -Uri $uri | Out-Null
+          } catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 409) { throw }
+          }

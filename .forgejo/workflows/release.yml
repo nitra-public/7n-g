@@ -1,7 +1,7 @@
 name: Release g
 
-# Linux/Windows are built here and macOS on the GitHub mirror, which contributes
-# its two Apple binaries to this draft Forgejo release. This workflow is the
+# Linux is built here; macOS and Windows are built on the GitHub mirror, which
+# contributes their binaries to this draft Forgejo release. This workflow is the
 # only writer for Artifact Gateway and Formula/g.rb in 7n/homebrew; only then
 # does it publish the Forgejo release. All Homebrew URLs are public immutable
 # Artifact Gateway URLs, never private Forgejo or GitHub mirror download URLs.
@@ -71,20 +71,6 @@ jobs:
             asset: g-x86_64-unknown-linux-musl
             bin_name: g
             builder: zigbuild
-          # windows-gnu відкинуто: aws-lc-sys (crypto rustls) несе vendored
-          # jitterentropy-library, чий build.rs вирішує "компілювати чи ні" за
-          # target_env замість target_os — на gnu безумовно тягне POSIX-only
-          # <sched.h>, якого немає в MinGW ("fatal error: 'sched.h' file not
-          # found", спостережено 2026-08-17; той самий баг вилазить і на
-          # реальному Windows з GNU/MinGW-тулчейном, це не наслідок Zig-кросу).
-          # На msvc-таргеті aws-lc-sys вважає себе не-POSIX і пропускає
-          # jitterentropy — баг просто не спрацьовує. cargo-xwin легально тягне
-          # офіційний MS SDK/CRT (на відміну від Apple SDK — MS дозволяє це для
-          # крос-компіляції, звідси й існування xwin/cargo-xwin).
-          - target: x86_64-pc-windows-msvc
-            asset: g-x86_64-pc-windows-msvc.exe
-            bin_name: g.exe
-            builder: xwin
     steps:
       - uses: actions/checkout@v4
 
@@ -114,9 +100,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          # cargo-xwin лінкує через rust-lld (частина llvm-tools) замість
-          # системного linker — потрібен окремий rustup-компонент лише для msvc-ноги.
-          components: ${{ matrix.builder == 'xwin' && 'llvm-tools' || '' }}
 
       # apt виявився непрацездатним і на tauri-образі ("Permission denied" на
       # /var/lib/apt/lists, той самий дефект, що на інших варіантах — 2026-08-16).
@@ -154,73 +137,9 @@ jobs:
           cp -r /tmp/zig-extract/. "$ZIG_DIR/"
           echo "$ZIG_DIR" >> "$GITHUB_PATH"
 
-      # LLVM-реліз (~1.6GB) + компіляція cargo-xwin з нуля + довантаження MS
-      # SDK/CRT через xwin разом займали ~20+ хв на кожному прогоні — жоден
-      # з трьох не залежить від нашого коду, лише від пінованих версій
-      # (LLVM 19.1.0 / cargo-xwin 0.23.1), тож кешуємо всі три одним ключем.
-      # actions/cache@v6 І v4 ОБИДВІ мовчки нічого не роблять (ні restore, ні
-      # save) — обидві намагаються спершу новіший "twirp v2" cache-протокол
-      # (GHES >= 3.5), якого self-hosted cache-сервер тут, судячи з усього,
-      # не підтримує ("Cache action is only supported on GHES version >= 3.5"
-      # в логах ОБОХ версій, спостережено 2026-08-18, хоча cache-сервер
-      # реально підключений). v3 використовує старіший REST cache-протокол
-      # без цієї перевірки.
-      - name: Cache LLVM/cargo-xwin/xwin SDK
-        if: matrix.builder == 'xwin'
-        uses: actions/cache@v3
-        with:
-          path: |
-            ${{ github.workspace }}/.llvm
-            ${{ github.workspace }}/.cargo/bin/cargo-xwin
-            ${{ github.workspace }}/.home/.cache/cargo-xwin
-          key: xwin-toolchain-llvm19.1.0-cargoxwin0.23.1-v1
-
-      # cargo-xwin сам довантажує офіційний MS SDK/CRT (через "xwin", легально —
-      # на відміну від Apple SDK) при першому запуску, кешує в CARGO_HOME.
-      # Пінуємо версію явно — і для відтворюваності, і бо кеш-ключ вище її
-      # називає буквально (кеш і версія мають рухатись разом).
-      - name: Install cargo-xwin (no apt/root needed)
-        if: matrix.builder == 'xwin'
-        run: |
-          test -x "$CARGO_HOME/bin/cargo-xwin" || cargo install cargo-xwin --version 0.23.1 --locked
-
-      # "zig cc --driver-mode=cl" виявився глухим кутом: zig-овий "cc" завжди
-      # інжектить власні hardening-прапори (-fstack-protector-strong, --param
-      # ssp-buffer-size=4 тощо) ДО обробки driver-mode, а clang-cl-парсер
-      # (MSVC-стиль) не розуміє ці GNU-прапори — "error: no such file or
-      # directory: 'ssp-buffer-size=4'" (відтворено локально 2026-08-17,
-      # структурний баг Zig, не наш wrapper). cc-rs шукає компілятор рівно на
-      # імʼя "clang-cl" в PATH — довантажуємо СПРАВЖНІЙ LLVM-реліз (легально,
-      # на відміну від Apple SDK) замість емуляції через Zig.
-      - name: Install real LLVM (clang-cl/lld-link — Zig-emulation is structurally broken for cl-mode)
-        if: matrix.builder == 'xwin'
-        run: |
-          LLVM_DIR="$GITHUB_WORKSPACE/.llvm"
-          if [ ! -x "$LLVM_DIR/bin/clang-cl" ]; then
-            mkdir -p "$LLVM_DIR" /tmp/llvm-extract
-            curl -fsSL -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/LLVM-19.1.0-Linux-AArch64.tar.xz
-            if ! tar -xf /tmp/llvm.tar.xz -C /tmp/llvm-extract --strip-components=1 2>/dev/null; then
-              python3 - <<'PYEOF'
-          import lzma, os, shutil, tarfile
-
-          with lzma.open("/tmp/llvm.tar.xz") as f, tarfile.open(fileobj=f) as tar:
-              top = tar.getnames()[0].split("/")[0]
-              tar.extractall("/tmp/llvm-raw")
-          for name in os.listdir(os.path.join("/tmp/llvm-raw", top)):
-              shutil.move(os.path.join("/tmp/llvm-raw", top, name), "/tmp/llvm-extract")
-          PYEOF
-            fi
-            cp -r /tmp/llvm-extract/. "$LLVM_DIR/"
-          fi
-          echo "$LLVM_DIR/bin" >> "$GITHUB_PATH"
-
       - name: Build (cargo-zigbuild — musl/Apple)
         if: matrix.builder == 'zigbuild'
         run: cargo zigbuild --release --target ${{ matrix.target }} --bin g
-
-      - name: Build (cargo-xwin — Windows MSVC)
-        if: matrix.builder == 'xwin'
-        run: cargo xwin build --release --target ${{ matrix.target }} --bin g
 
       - name: Stage binary
         run: |
