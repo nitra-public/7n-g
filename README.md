@@ -38,6 +38,8 @@ Rust-переписання `@7n/n` (Bun/JS CLI з монорепо `7n`) — gi
 ```bash
 cargo binstall n7n-g   # ставить бінарник `g`
 # або
+brew trust --tap https://git.7n.ai/7n/homebrew.git # Homebrew 6+; разова явна довіра
+brew tap 7n/homebrew https://git.7n.ai/7n/homebrew.git
 brew install 7n/homebrew/g
 ```
 
