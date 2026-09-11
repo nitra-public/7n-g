@@ -62,7 +62,7 @@ jobs:
     # under капотом уже є вільний под з іншої причини), але експортер його не
     # рахує як pending — тож коли реплік 0, KEDA ніколи не масштабується під
     # такий job, і він висить у "waiting" нескінченно (застрягання v0.1.4-релізу).
-    runs-on: tauri-amd64
+    runs-on: release-arm64
     strategy:
       fail-fast: false
       matrix:
@@ -139,7 +139,7 @@ jobs:
         run: |
           ZIG_DIR="$GITHUB_WORKSPACE/.zig"
           mkdir -p "$ZIG_DIR" /tmp/zig-extract
-          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
+          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-aarch64-0.13.0.tar.xz
           if ! tar -xf /tmp/zig.tar.xz -C /tmp/zig-extract --strip-components=1 2>/dev/null; then
             python3 - <<'PYEOF'
           import lzma, os, shutil, tarfile
@@ -198,7 +198,7 @@ jobs:
           LLVM_DIR="$GITHUB_WORKSPACE/.llvm"
           if [ ! -x "$LLVM_DIR/bin/clang-cl" ]; then
             mkdir -p "$LLVM_DIR" /tmp/llvm-extract
-            curl -fsSL -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/LLVM-19.1.0-Linux-X64.tar.xz
+            curl -fsSL -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.0/LLVM-19.1.0-Linux-AArch64.tar.xz
             if ! tar -xf /tmp/llvm.tar.xz -C /tmp/llvm-extract --strip-components=1 2>/dev/null; then
               python3 - <<'PYEOF'
           import lzma, os, shutil, tarfile
@@ -242,7 +242,7 @@ jobs:
     # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — той самий label-баг, що
     # й у build-джобі вище: forgejo-runner-exporter (метрика для KEDA) рахує
     # лише повний label раннера, "голий" label до scale-up не тригерить.
-    runs-on: ubuntu-latest-amd64
+    runs-on: release-arm64
     steps:
       - uses: actions/download-artifact@v3
         with:

@@ -7,10 +7,11 @@ on:
 
 jobs:
   test:
-    # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — forgejo-runner-exporter
+    # The current runner fleet exposes ubuntu-latest-arm64; keep the explicit
+    # architecture label so KEDA can observe and schedule the queued job.
     # (метрика для KEDA) рахує лише повний label раннера; голий label не
     # тригерить scale-up, коли немає іншого трафіку, що тримає под живим.
-    runs-on: ubuntu-latest-amd64
+    runs-on: ubuntu-latest-arm64
     steps:
       - uses: actions/checkout@v4
       # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
