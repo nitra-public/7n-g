@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": { "title": "Crate-архітектура n7n-g", "quality_profile": "showcase", "viewBox": [1280, 800] },
+  "components": [
+    { "id": "clap", "type": "external", "label": "clap", "sublabel": "CLI parser · derive", "pos": [35, 130], "size": [145, 62] },
+    { "id": "tui_deps", "type": "external", "label": "crossterm + nucleo-matcher", "sublabel": "TTY UI · fuzzy matching", "pos": [35, 510], "size": [195, 62] },
+    { "id": "cli", "type": "frontend", "label": "src/bin/g.rs", "sublabel": "бінарник g · парсинг команд", "pos": [280, 270], "size": [185, 66] },
+    { "id": "commands", "type": "backend", "label": "Командні модулі", "sublabel": "getw · pull · push · ch", "pos": [535, 270], "size": [190, 66] },
+    { "id": "merge", "type": "backend", "label": "merge.rs", "sublabel": "спільне delta-merge ядро", "pos": [790, 115], "size": [195, 66] },
+    { "id": "agents", "type": "security", "label": "acp_agents.rs", "sublabel": "реалізації LLM seam-ів", "pos": [790, 420], "size": [195, 66] },
+    { "id": "gix_util", "type": "backend", "label": "n7n-gix-util", "sublabel": "спільні read-only helpers", "pos": [790, 615], "size": [195, 66] },
+    { "id": "git", "type": "external", "label": "Git executable", "sublabel": "merge, stash, fetch, push", "pos": [1060, 130], "size": [175, 66] },
+    { "id": "gix", "type": "external", "label": "gix", "sublabel": "Rust Git object access", "pos": [1060, 615], "size": [175, 66] },
+    { "id": "llm_lib", "type": "external", "label": "n7n-llm-lib", "sublabel": "cascade · ACP · local model", "pos": [1060, 380], "size": [175, 66] },
+    { "id": "tokio", "type": "external", "label": "tokio", "sublabel": "sync/async bridge", "pos": [1060, 495], "size": [175, 62] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "crate n7n-g — цей репозиторій", "wraps": ["cli", "commands", "merge", "agents"] }
+  ],
+  "connections": [
+    { "id": "clap-cli", "from": "clap", "to": "cli", "label": "derive Parser / Subcommand" },
+    { "id": "cli-commands", "from": "cli", "to": "commands", "label": "диспетчеризація getw / pull / push / ch", "variant": "emphasis", "labelDy": 57 },
+    { "id": "commands-merge", "from": "commands", "to": "merge", "label": "getw, pull, push: спільне ядро", "fromSide": "top", "toSide": "left" },
+    { "id": "commands-agents", "from": "commands", "to": "agents", "label": "ConflictResolver / MessageGenerator", "fromSide": "bottom", "toSide": "left", "variant": "security", "labelAt": [900, 350] },
+    { "id": "commands-gix-util", "from": "commands", "to": "gix_util", "label": "refs, worktree, tree diff", "fromSide": "bottom", "toSide": "left" },
+    { "id": "commands-tui", "from": "commands", "to": "tui_deps", "label": "getw: інтерактивний picker", "fromSide": "bottom", "toSide": "right" },
+    { "id": "merge-git", "from": "merge", "to": "git", "label": "apply, merge-file, stash", "variant": "emphasis", "labelDy": 72 },
+    { "id": "commands-git", "from": "commands", "to": "git", "label": "fetch і push", "fromSide": "right", "toSide": "bottom" },
+    { "id": "gix-util-gix", "from": "gix_util", "to": "gix", "label": "gix::discover і tree APIs", "labelDy": 57 },
+    { "id": "agents-llm-lib", "from": "agents", "to": "llm_lib", "label": "one_shot_cascade · egress policy", "variant": "security", "labelAt": [1023, 360] },
+    { "id": "agents-tokio", "from": "agents", "to": "tokio", "label": "current-thread runtime", "variant": "security", "labelAt": [1023, 575] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Внутрішній crate", "items": ["n7n_g експортує командні модулі; src/bin/g.rs лишається тонким CLI-шаром.", "merge.rs є спільним ядром для getw, pull і push; ch має власний потік."] },
+    { "dot": "violet", "title": "Зовнішні залежності за роллю", "items": ["gix і n7n-gix-util покривають читання Git-стану; мутації виконуються через Git executable.", "n7n-llm-lib + tokio підключаються лише через seam-адаптер; crossterm і nucleo-matcher формують TUI picker."] }
+  ]
+}
