@@ -144,7 +144,7 @@ jobs:
       - name: Build macOS asset
         run: |
           set -euo pipefail
-          cargo +1.93.0 zigbuild -p g --release --locked --target aarch64-apple-darwin
+          cargo +1.93.0 zigbuild -p n7n-g --release --locked --target aarch64-apple-darwin
       - name: Archive signed macOS asset
         run: |
           set -euo pipefail
