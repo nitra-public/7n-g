@@ -1,337 +1,285 @@
-name: Release g
+name: Release
 
-# Linux is built here; macOS and Windows are built on the GitHub mirror, which
-# contributes their binaries to this draft Forgejo release. This workflow is the
-# only writer for Artifact Gateway and Formula/g.rb in 7n/homebrew; only then
-# does it publish the Forgejo release. All Homebrew URLs are public immutable
-# Artifact Gateway URLs, never private Forgejo or GitHub mirror download URLs.
-#
-# Linux+Windows кросскомпілюються на self-hosted Linux-раннері (двома різними
-# інструментами залежно від таргету, matrix.builder):
-# - zigbuild (musl): cargo-zigbuild + Zig несе власний мінімальний musl-сисрут.
-# - xwin (Windows): cargo-xwin замість cargo-zigbuild — windows-gnu відкинуто
-#   через upstream-баг у aws-lc-sys (vendored jitterentropy тягне POSIX-only
-#   sched.h на будь-якому не-msvc таргеті, спостережено 2026-08-17). msvc-таргет
-#   легально отримує офіційний MS SDK/CRT через xwin (Microsoft дозволяє це для
-#   крос-компіляції, на відміну від Apple). Zig-емуляція clang-cl теж
-#   відкинута (структурний баг: hardening-прапори Zig несумісні з cl-режимом) —
-#   лінкуємо через довантажений СПРАВЖНІЙ LLVM-реліз.
-#
-# macOS (aarch64-apple-darwin) НЕ будується тут — немає macOS-раннера на
-# git.7n.ai, а cargo-zigbuild впирається у aws-lc-sys, якому потрібен реальний
-# Apple SDK (CoreServices.h), недоступний через Zig-заглушки. Замість цього
-# macOS будується на GitHub Actions macos-14 (реальний Mac, нативно, без
-# крос-компіляції) — окремий workflow nitra-public/7n-g:
-# .github/workflows/release-macos.yml (mirror цього репо, sync_on_commit).
-#
-# ВАЖЛИВО (спостережено 2026-08-19): цей файл більше НЕ пише Formula/g.rb.
-# git.7n.ai — навмисно приватний інстанс
-# (FORGEJO__service__REQUIRE_SIGNIN_VIEW: 'true' в nitra-protected/k8s) —
-# анонімний `brew install`/cargo-binstall на git.7n.ai-релізі отримує
-# редирект на /user/login, а не файл. Публічний дистрибутив (Homebrew tap +
-# фактичні asset-URL у формулі) тепер повністю на боці GitHub
-# (release-macos.yml): той workflow чекає на build-джобу тут, забирає всі
-# три асети (Linux/Windows звідси, macOS зі своєї збірки), публікує їх у
-# СПРАВЖНІЙ публічний GitHub Release і сам пише ОБИДВІ секції формули —
-# єдиний writer, без гонки двох незалежних патчерів, яка була раніше.
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch: {}
-
-# `g-release-homebrew` is a Forgejo Authorized Integration. Its audience is
-# stored in the repository Actions variable G_RELEASE_AUDIENCE.
-enable-openid-connect: true
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional exact semantic version, without v"
+        required: false
+        type: string
 
 concurrency:
-  group: ${{ github.ref }}-${{ github.workflow }}
+  # A main push may supersede an older preparation run, but must never cancel a tag release.
+  group: g-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    # git.7n.ai: "ubuntu-latest" мапиться на непослідовний fleet self-hosted-образів,
-    # частина з яких бракує базових утиліт (curl/apt/sudo/xz/python3 залежно від
-    # конкретного варіанту, спостережено 2026-08-16). "tauri" — окремий, повноцінно
-    # оснащений runner (Tauri-збірки вимагають повний C-тулчейн) — пробуємо його.
-    #
-    # "tauri-amd64", НЕ голе "tauri" (спостережено 2026-08-19): раннер сам
-    # декларує лише "tauri-amd64" (архітектурний суфікс), і саме цей повний
-    # label читає forgejo-runner-exporter у своєму Prometheus-запиті, на який
-    # дивиться KEDA. Job із голим "tauri" інколи ПРИЗНАЧАЄТЬСЯ раннеру (коли
-    # under капотом уже є вільний под з іншої причини), але експортер його не
-    # рахує як pending — тож коли реплік 0, KEDA ніколи не масштабується під
-    # такий job, і він висить у "waiting" нескінченно (застрягання v0.1.4-релізу).
-    runs-on: release-arm64
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            asset: g-x86_64-unknown-linux-musl
-            bin_name: g
-            builder: zigbuild
+  prepare-release-pr:
+    # Never push a release commit to protected main. Prepare it in a PR instead.
+    if: "${{ github.ref_type == 'branch' && github.ref_name == 'main' && !contains(github.event.head_commit.message, 'chore(release): v') }}"
+    runs-on: macos-arm64
+    enable-openid-connect: true
     steps:
-      - uses: actions/checkout@v4
-
-      # Виявлено на git.7n.ai (2026-08-16): різні прогони підхоплюють різні варіанти
-      # self-hosted runner-образу з несумісними дефектами — одні без curl, одні без
-      # writable $HOME, і невідомо заздалегідь, чи є sudo (є не на всіх). $SUDO —
-      # порожній рядок, якщо sudo відсутній (тоді job явно вже виконується як root).
-      - name: Detect sudo availability
-        run: echo "SUDO=$(command -v sudo || true)" >> "$GITHUB_ENV"
-
-      - name: Ensure curl (self-hosted runner image lacks it)
-        run: command -v curl || ($SUDO apt-get update -qq && $SUDO apt-get install -y -qq curl)
-
-      # $GITHUB_WORKSPACE гарантовано writable (checkout уже туди пише) — переносимо
-      # $HOME туди замість боротьби з правами оригінального $HOME (яке на одному з
-      # варіантів образу непривілейоване й без sudo для виправлення). На tauri-образі
-      # rustup вже преінстальований у /opt/rustup (root-only) — RUSTUP_HOME/CARGO_HOME
-      # теж переносимо в workspace, інакше "could not create temp file
-      # /opt/rustup/tmp/...: Permission denied" (спостережено 2026-08-16).
-      - name: Use writable HOME/RUSTUP_HOME/CARGO_HOME for rustup
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/.home"
-          echo "HOME=$GITHUB_WORKSPACE/.home" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$GITHUB_WORKSPACE/.rustup" >> "$GITHUB_ENV"
-          echo "CARGO_HOME=$GITHUB_WORKSPACE/.cargo" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
         with:
-          targets: ${{ matrix.target }}
-
-      # apt виявився непрацездатним і на tauri-образі ("Permission denied" на
-      # /var/lib/apt/lists, той самий дефект, що на інших варіантах — 2026-08-16).
-      # Власний zig-wrapper (пряме "zig cc" як CC/linker) наштовхнувся на
-      # ld.lld duplicate-symbol _start/_init/_fini (rust-side self-contained
-      # crt-обʼєкти проти zig-ового musl-сисрута), а rustc-фікс через
-      # "-C link-self-contained=-crto" виявився unstable-опцією на stable-каналі
-      # ("only y/yes/on/n/no/off/-linker are stable", спостережено 2026-08-16).
-      # cargo-zigbuild — призначений саме для цього сценарію (Rust + zig-cc +
-      # musl/apple), сам знає правильні лінкер-прапори — надійніше за власний
-      # wrapper. Автозавантаження zig у ньому не спрацювало на цьому образі
-      # ("Failed to find zig", спостережено 2026-08-16) — довантажуємо zig самі
-      # (curl+tar, python3-lzma фолбек) й кладемо на PATH.
-      - name: Install cargo-zigbuild (no apt/root needed)
-        if: matrix.builder == 'zigbuild'
-        run: cargo install cargo-zigbuild --locked
-
-      - name: Install zig (cargo-zigbuild couldn't auto-download it here)
-        if: matrix.builder == 'zigbuild'
+          fetch-depth: 0
+      - id: current-version
+        name: Read workspace version
+        shell: sh
         run: |
-          ZIG_DIR="$GITHUB_WORKSPACE/.zig"
-          mkdir -p "$ZIG_DIR" /tmp/zig-extract
-          curl -fsSL -o /tmp/zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-aarch64-0.13.0.tar.xz
-          if ! tar -xf /tmp/zig.tar.xz -C /tmp/zig-extract --strip-components=1 2>/dev/null; then
-            python3 - <<'PYEOF'
-          import lzma, os, shutil, tarfile
-
-          with lzma.open("/tmp/zig.tar.xz") as f, tarfile.open(fileobj=f) as tar:
-              top = tar.getnames()[0].split("/")[0]
-              tar.extractall("/tmp/zig-raw")
-          for name in os.listdir(os.path.join("/tmp/zig-raw", top)):
-              shutil.move(os.path.join("/tmp/zig-raw", top, name), "/tmp/zig-extract")
-          PYEOF
-          fi
-          cp -r /tmp/zig-extract/. "$ZIG_DIR/"
-          echo "$ZIG_DIR" >> "$GITHUB_PATH"
-
-      - name: Build (cargo-zigbuild — musl/Apple)
-        if: matrix.builder == 'zigbuild'
-        run: cargo zigbuild --release --target ${{ matrix.target }} --bin g
-
-      - name: Stage binary
-        run: |
-          mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin_name }}" "dist/${{ matrix.asset }}"
-          chmod +x "dist/${{ matrix.asset }}"
-
-      # v4+ (@actions/artifact v2+ протокол) не підтримується на Forgejo/GHES-сумісних
-      # runner'ах ("GHESNotSupportedError", спостережено 2026-08-16, ПІСЛЯ успішного
-      # білду — це вже не build-помилка). v3 сумісний.
-      - uses: actions/upload-artifact@v3
+          set -eu
+          version="$(awk -F '"' '/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' Cargo.toml)"
+          test -n "${version}"
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+      - id: oidc
+        uses: nitra/actions/oidc-token@v1
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
-          if-no-files-found: error
-
-  release:
-    needs: build
-    # ubuntu-latest-amd64, НЕ голе "ubuntu-latest" — той самий label-баг, що
-    # й у build-джобі вище: forgejo-runner-exporter (метрика для KEDA) рахує
-    # лише повний label раннера, "голий" label до scale-up не тригерить.
-    runs-on: release-arm64
-    steps:
-      - uses: actions/download-artifact@v3
+          audience: u:3:0a002276-48e3-4717-a189-199fe947cce3
+      - id: release-version
+        uses: nitra/actions/conventional-release-version@v1
         with:
-          path: dist
-
-      # download-artifact@v3 без "name" кладе кожен матричний артефакт у власну
-      # підтеку dist/<asset>/<asset> — збираємо всі 4 в один плаский release/.
-      - name: Flatten artifact layout
-        run: |
-          mkdir -p release
-          find dist -type f -exec cp {} release/ \;
-
-      # Forgejo не має власного `gh`-аналога, преінстальованого на runners — реліз і
-      # asset-upload через REST API (Gitea-сумісний, той самий у Forgejo). NB:
-      # ${{ vars.FJ_API_URL }} має вказувати на https://git.7n.ai/api/v1 — виставлено
-      # як repo variable (назва без префікса FORGEJO_ — той зарезервований платформою,
-      # POST .../actions/variables/FORGEJO_API_URL повертає "invalid secret name",
-      # перевірено 2026-08-16).
-      # Ідемпотентно: реліз для цього тегу міг уже існувати (напр. GitHub-side
-      # macOS-workflow встиг створити його першим — обидва тригеряться тим
-      # самим tag push, порядок не гарантований).
-      - name: Create Forgejo Release + upload assets
+          current-version: ${{ steps.current-version.outputs.version }}
+          requested-version: ${{ inputs.version }}
+          tag-prefix: v
+      - if: steps.release-version.outputs.release == 'true' && steps.current-version.outputs.version != steps.release-version.outputs.version
+        name: Update g workspace version
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          API: ${{ vars.FJ_API_URL }}
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.release-version.outputs.version }}
+        run: |
+          set -eu
+          perl -0pi -e 's/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/q{version = "} . $ENV{VERSION} . q{"}/me' Cargo.toml
+          perl -0pi -e 's/(name = "n7n-g"\nversion = ")[^"]+/$1$ENV{VERSION}/g' Cargo.lock
+      - if: steps.release-version.outputs.release == 'true'
+        uses: nitra/actions/forgejo-create-release-pr@v1
+        with:
+          token: ${{ steps.oidc.outputs.token }}
+          server-url: https://git.7n.ai
+          repository: 7n/g
+          tag: ${{ steps.release-version.outputs.tag }}
+          paths: |
+            Cargo.toml
+            Cargo.lock
+          base: main
+          commit-message: "chore(release): ${{ steps.release-version.outputs.tag }}"
+
+  tag-release:
+    # A merged release PR has the version commit on protected main; only the tag is pushed.
+    if: "${{ github.ref_type == 'branch' && github.ref_name == 'main' && contains(github.event.head_commit.message, 'chore(release): v') }}"
+    runs-on: macos-arm64
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: oidc
+        uses: nitra/actions/oidc-token@v1
+        with:
+          audience: u:3:0a002276-48e3-4717-a189-199fe947cce3
+      - id: tag
         run: |
           set -euo pipefail
-          # jq відсутній на цьому runner-образі ("command not found", спостережено
-          # 2026-08-16) — відповідь плоска ({"id":N,...}), витягуємо без jq.
-          existing=$(curl -fsS "$API/repos/$REPO/releases/tags/$TAG" \
-            -H "Authorization: token $TOKEN" 2>/dev/null | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*' || true)
-          if [ -n "$existing" ]; then
-            release_id="$existing"
-          else
-            release_id=$(curl -fsS -X POST "$API/repos/$REPO/releases" \
-              -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":true}" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
-          fi
-          for f in release/*; do
-            response_file="$(mktemp)"
-            status="$(curl --silent --show-error --output "${response_file}" --write-out '%{http_code}' \
-              -X POST "$API/repos/$REPO/releases/$release_id/assets?name=$(basename "$f")" \
-              -H "Authorization: token $TOKEN" -F "attachment=@$f")"
-            if [ "${status}" = 409 ]; then
-              echo "release asset already exists: $(basename "$f")"
-            elif [ "${status}" != 201 ]; then
-              cat "${response_file}" >&2
-              exit 1
-            fi
-          done
+          version="$(awk -F '"' '/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' Cargo.toml)"
+          printf 'value=v%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+      - uses: nitra/actions/forgejo-tag-and-dispatch@v1
+        with:
+          token: ${{ steps.oidc.outputs.token }}
+          server-url: https://git.7n.ai
+          repository: 7n/g
+          tag: ${{ steps.tag.outputs.value }}
+          workflow: release.yml
+          expected-commit-message: "chore(release): ${{ steps.tag.outputs.value }}"
+
+  validate:
+    if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
+    runs-on: macos-arm64
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate workspace and registry package
+        run: |
+          set -euo pipefail
+          version="$(awk -F '"' '/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' Cargo.toml)"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          # Full lint and test coverage is required from CI / validate before merge.
+          cargo fmt --check
+          cargo test --locked
+
+  create-release:
+    needs: validate
+    runs-on: macos-arm64
+    enable-openid-connect: true
+    outputs:
+      id: ${{ steps.release.outputs.release-id }}
+    steps:
+      - id: oidc
+        uses: nitra/actions/oidc-token@v1
+        with:
+          audience: u:3:0a002276-48e3-4717-a189-199fe947cce3
+      - id: release
+        uses: nitra/actions/forgejo-create-draft-release@v1
+        with:
+          token: ${{ steps.oidc.outputs.token }}
+          server-url: https://git.7n.ai
+          repository: 7n/g
+          tag: ${{ github.ref_name }}
+
+  build-macos-arm64:
+    needs: create-release
+    runs-on: macos-arm64
+    env:
+      RUSTC_WRAPPER: /opt/homebrew/bin/sccache
+      SCCACHE_DIR: /Users/m1-grey/Library/Caches/g/sccache
+      SCCACHE_CACHE_SIZE: 20G
+      RUSTUP_TOOLCHAIN: 1.93.0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure persistent Rust target directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_dir="/Users/m1-grey/Library/Caches/g/cargo-target/1.93.0"
+          mkdir -p "${target_dir}"
+          printf 'CARGO_TARGET_DIR=%s\n' "${target_dir}" >> "${GITHUB_ENV}"
+      - name: Build macOS asset
+        run: |
+          set -euo pipefail
+          cargo +1.93.0 zigbuild -p g --release --locked --target aarch64-apple-darwin
+      - name: Archive signed macOS asset
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          tar -C "${CARGO_TARGET_DIR}/aarch64-apple-darwin/release" -czf release-assets/g-aarch64-apple-darwin.tar.gz g
+      - uses: https://code.forgejo.org/actions/upload-artifact@v4
+        with:
+          name: release-macos-arm64
+          path: release-assets
+
+  build-linux-x86_64:
+    needs: create-release
+    runs-on: macos-arm64
+    env: { RUSTC_WRAPPER: /opt/homebrew/bin/sccache, SCCACHE_DIR: /Users/m1-grey/Library/Caches/g/sccache, SCCACHE_CACHE_SIZE: 20G, RUSTUP_TOOLCHAIN: 1.93.0 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: nitra/actions/rust-zigbuild-archive@v1
+        with: { package: n7n-g, binary: g, target: x86_64-unknown-linux-gnu, target-directory: /Users/m1-grey/Library/Caches/g/cargo-target/1.93.0, archive-path: release-assets/g-x86_64-unknown-linux-gnu.tar.gz, sccache-directory: /Users/m1-grey/Library/Caches/g/sccache }
+      - uses: https://code.forgejo.org/actions/upload-artifact@v4
+        with: { name: release-linux-x86_64, path: release-assets }
+
+  build-linux-arm64:
+    needs: create-release
+    runs-on: macos-arm64
+    env: { RUSTC_WRAPPER: /opt/homebrew/bin/sccache, SCCACHE_DIR: /Users/m1-grey/Library/Caches/g/sccache, SCCACHE_CACHE_SIZE: 20G, RUSTUP_TOOLCHAIN: 1.93.0 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: nitra/actions/rust-zigbuild-archive@v1
+        with: { package: n7n-g, binary: g, target: aarch64-unknown-linux-gnu, target-directory: /Users/m1-grey/Library/Caches/g/cargo-target/1.93.0, archive-path: release-assets/g-aarch64-unknown-linux-gnu.tar.gz, sccache-directory: /Users/m1-grey/Library/Caches/g/sccache }
+      - uses: https://code.forgejo.org/actions/upload-artifact@v4
+        with: { name: release-linux-arm64, path: release-assets }
+
+  build-windows-x86_64:
+    needs: create-release
+    runs-on: macos-arm64
+    env: { RUSTC_WRAPPER: /opt/homebrew/bin/sccache, SCCACHE_DIR: /Users/m1-grey/Library/Caches/g/sccache, SCCACHE_CACHE_SIZE: 20G, RUSTUP_TOOLCHAIN: 1.93.0 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: nitra/actions/rust-zigbuild-archive@v1
+        with: { package: n7n-g, binary: g, target: x86_64-pc-windows-gnu, target-directory: /Users/m1-grey/Library/Caches/g/cargo-target/1.93.0, archive-path: release-assets/g-x86_64-pc-windows-gnu.zip, archive-format: zip, sccache-directory: /Users/m1-grey/Library/Caches/g/sccache }
+      - uses: https://code.forgejo.org/actions/upload-artifact@v4
+        with: { name: release-windows-x86_64, path: release-assets }
+
+  collect_and_publish:
+    needs: [create-release, build-macos-arm64, build-linux-x86_64, build-linux-arm64, build-windows-x86_64]
+    runs-on: macos-arm64
+    enable-openid-connect: true
+    outputs:
+      homebrew_url: ${{ steps.homebrew.outputs.url }}
+      homebrew_macos_sha256: ${{ steps.checks.outputs.macos_sha256 }}
+      homebrew_linux_x86_64_sha256: ${{ steps.checks.outputs.linux_x86_64_sha256 }}
+      homebrew_linux_arm64_sha256: ${{ steps.checks.outputs.linux_arm64_sha256 }}
+    steps:
+      - uses: https://code.forgejo.org/actions/download-artifact@v4
+        with: { pattern: release-*, path: release-assets, merge-multiple: true }
+      - uses: nitra/actions/release-manifest@v1
+        with:
+          output-directory: release-assets
+          title: g ${{ github.ref_name }}
+          files: |
+            release-assets/g-aarch64-apple-darwin.tar.gz
+            release-assets/g-x86_64-unknown-linux-gnu.tar.gz
+            release-assets/g-aarch64-unknown-linux-gnu.tar.gz
+            release-assets/g-x86_64-pc-windows-gnu.zip
+      - id: oidc
+        uses: nitra/actions/oidc-token@v1
+        with: { audience: u:3:0a002276-48e3-4717-a189-199fe947cce3 }
+      - uses: nitra/actions/forgejo-upload-release-assets@v1
+        with:
+          token: ${{ steps.oidc.outputs.token }}
+          server-url: https://git.7n.ai
+          repository: 7n/g
+          release-id: ${{ needs.create-release.outputs.id }}
+          files: |
+            release-assets/g-aarch64-apple-darwin.tar.gz
+            release-assets/g-x86_64-unknown-linux-gnu.tar.gz
+            release-assets/g-aarch64-unknown-linux-gnu.tar.gz
+            release-assets/g-x86_64-pc-windows-gnu.zip
+            release-assets/SHA256SUMS
+            release-assets/MANIFEST.txt
+      - id: checks
+        run: |
+          set -eu; cd release-assets; mac=g-aarch64-apple-darwin.tar.gz; x64=g-x86_64-unknown-linux-gnu.tar.gz; arm=g-aarch64-unknown-linux-gnu.tar.gz
+          mac_sha="$(shasum -a 256 "$mac"|awk '{print $1}')"; x64_sha="$(shasum -a 256 "$x64"|awk '{print $1}')"; arm_sha="$(shasum -a 256 "$arm"|awk '{print $1}')"; printf 'macos_sha256=%s\nlinux_x86_64_sha256=%s\nlinux_arm64_sha256=%s\n' "$mac_sha" "$x64_sha" "$arm_sha" >> "$GITHUB_OUTPUT"
+      - id: homebrew
+        uses: nitra/actions/artifact-publish-release-assets@v1
+        with:
+          project: g-release
+          files: |
+            release-assets/g-aarch64-apple-darwin.tar.gz
+            release-assets/g-x86_64-unknown-linux-gnu.tar.gz
+            release-assets/g-aarch64-unknown-linux-gnu.tar.gz
+
 
   update-homebrew:
-    needs: release
-    # The release-arm64 image provides the Artifact Gateway CLI used by foc.
-    runs-on: release-arm64
+    needs: collect_and_publish
+    runs-on: macos-arm64
+    enable-openid-connect: true
     steps:
-      - name: Publish immutable assets and update the Homebrew tap
-        env:
-          API: https://git.7n.ai/api/v1
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          G_RELEASE_AUDIENCE: ${{ vars.G_RELEASE_AUDIENCE }}
-        run: |
-          set -euo pipefail
-          test -n "${G_RELEASE_AUDIENCE}" || { echo "G_RELEASE_AUDIENCE repository variable is required" >&2; exit 1; }
-          jwt="$(curl --fail --silent --show-error --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${G_RELEASE_AUDIENCE}" | jq --raw-output '.value')"
-          test -n "${jwt}" && test "${jwt}" != "null"
-          echo "::add-mask::${jwt}"
-          version="${TAG#v}"
-          assets='g-aarch64-apple-darwin g-x86_64-apple-darwin g-x86_64-unknown-linux-musl g-x86_64-pc-windows-msvc.exe'
-          staging="$(mktemp -d)"
-          assets_dir="${staging}/assets"
-          mkdir -p "${assets_dir}"
-          trap 'rm -rf "${staging}"' EXIT
-
-          # macOS is uploaded by the mirror workflow to this draft release.
-          release_json="${staging}/release.json"
-          for attempt in $(seq 1 40); do
-            curl --fail --silent --show-error --header "Authorization: Bearer ${jwt}" "${API}/repos/${REPO}/releases/tags/${TAG}" >"${release_json}"
-            missing=0
-            for asset in ${assets}; do
-              jq --exit-status --arg name "${asset}" '.assets | map(select(.name == $name)) | length == 1' "${release_json}" >/dev/null || missing=1
-            done
-            test "${missing}" = 0 && break
-            test "${attempt}" -lt 40 || { echo "release ${TAG} is missing platform assets" >&2; exit 1; }
-            sleep 30
-          done
-
-          for asset in ${assets}; do
-            url="$(jq --raw-output --arg name "${asset}" '.assets[] | select(.name == $name) | .browser_download_url' "${release_json}")"
-            test -n "${url}" && test "${url}" != "null"
-            curl --fail --location --silent --show-error --header "Authorization: Bearer ${jwt}" --output "${assets_dir}/${asset}" "${url}"
-          done
-          mac_arm_sha="$(shasum -a 256 "${assets_dir}/g-aarch64-apple-darwin" | awk '{print $1}')"
-          mac_x86_sha="$(shasum -a 256 "${assets_dir}/g-x86_64-apple-darwin" | awk '{print $1}')"
-          linux_sha="$(shasum -a 256 "${assets_dir}/g-x86_64-unknown-linux-musl" | awk '{print $1}')"
-          release_uuid="$(artifact uuid)"
-          artifact publish "${assets_dir}" --project g-release --version "${release_uuid}" --public --force
-          release_url="https://7n.ai/artifacts/g-release/${release_uuid}"
-          for asset in ${assets}; do curl --fail --location --silent --show-error --output /dev/null "${release_url}/${asset}"; done
-
-          git -c http.extraHeader="Authorization: Bearer ${jwt}" clone https://git.7n.ai/7n/homebrew.git "${staging}/tap"
-          cd "${staging}/tap"
-          mkdir -p Formula
-          cat > Formula/g.rb <<EOF
-          class G < Formula
-            desc "g CLI - git delta tool"
-            homepage "https://git.7n.ai/7n/g"
-            version "${version}"
-            license "ISC"
-
-            on_macos do
-              if Hardware::CPU.arm?
-                url "${release_url}/g-aarch64-apple-darwin"
-                sha256 "${mac_arm_sha}"
-                def install
-                  bin.install "g-aarch64-apple-darwin" => "g"
-                end
-              else
-                url "${release_url}/g-x86_64-apple-darwin"
-                sha256 "${mac_x86_sha}"
-                def install
-                  bin.install "g-x86_64-apple-darwin" => "g"
-                end
-              end
-            end
-
-            on_linux do
-              url "${release_url}/g-x86_64-unknown-linux-musl"
-              sha256 "${linux_sha}"
-              def install
-                bin.install "g-x86_64-unknown-linux-musl" => "g"
-              end
-            end
-
-            test do
-              system "#{bin}/g", "--help"
-            end
-          end
-          EOF
-          git add Formula/g.rb
-          git diff --cached --check
-          if ! git diff --cached --quiet; then
-            git config user.name "forgejo-actions[bot]"
-            git config user.email "forgejo-actions[bot]@users.noreply.git.7n.ai"
-            git commit -m "g ${version}"
-            git -c http.extraHeader="Authorization: Bearer ${jwt}" push origin HEAD:main
-          fi
+      - id: oidc
+        uses: nitra/actions/oidc-token@v1
+        with:
+          audience: u:3:0a002276-48e3-4717-a189-199fe947cce3
+      - id: formula_version
+        run: printf 'version=%s\n' "${GITHUB_REF_NAME#v}" >> "${GITHUB_OUTPUT}"
+      - uses: nitra/actions/homebrew-write-formula@v1
+        with:
+          token: ${{ steps.oidc.outputs.token }}
+          tap-url: https://git.7n.ai/7n/homebrew.git
+          formula-name: g
+          class-name: g
+          description: g CLI - git delta tool
+          homepage: https://git.7n.ai/7n/g
+          license: MIT
+          version: ${{ steps.formula_version.outputs.version }}
+          binary: g
+          macos-url: ${{ needs.collect_and_publish.outputs.homebrew_url }}/g-aarch64-apple-darwin.tar.gz
+          macos-sha256: ${{ needs.collect_and_publish.outputs.homebrew_macos_sha256 }}
+          linux-x86-64-url: ${{ needs.collect_and_publish.outputs.homebrew_url }}/g-x86_64-unknown-linux-gnu.tar.gz
+          linux-x86-64-sha256: ${{ needs.collect_and_publish.outputs.homebrew_linux_x86_64_sha256 }}
+          linux-arm64-url: ${{ needs.collect_and_publish.outputs.homebrew_url }}/g-aarch64-unknown-linux-gnu.tar.gz
+          linux-arm64-sha256: ${{ needs.collect_and_publish.outputs.homebrew_linux_arm64_sha256 }}
 
   publish-release:
     needs: update-homebrew
-    # Same image as the artifact publisher: this runner has jq, unlike some
-    # ubuntu-latest-amd64 images used by the legacy release job.
-    runs-on: release-arm64
+    runs-on: macos-arm64
+    enable-openid-connect: true
     steps:
-      - name: Publish the verified draft release
-        env:
-          API: https://git.7n.ai/api/v1
-          REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          G_RELEASE_AUDIENCE: ${{ vars.G_RELEASE_AUDIENCE }}
-        run: |
-          set -euo pipefail
-          test -n "${G_RELEASE_AUDIENCE}"
-          jwt="$(curl --fail --silent --show-error --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${G_RELEASE_AUDIENCE}" | jq --raw-output '.value')"
-          test -n "${jwt}" && test "${jwt}" != "null"
-          echo "::add-mask::${jwt}"
-          release="$(curl --fail --silent --show-error --header "Authorization: Bearer ${jwt}" "${API}/repos/${REPO}/releases/tags/${TAG}")"
-          id="$(printf '%s' "${release}" | jq --raw-output '.id')"
-          test "${id}" != "null"
-          curl --fail --silent --show-error --request PATCH --header "Authorization: Bearer ${jwt}" --header 'Content-Type: application/json' --data '{"draft":false}' "${API}/repos/${REPO}/releases/${id}"
+      - id: oidc
+        uses: nitra/actions/oidc-token@v1
+        with:
+          audience: u:3:0a002276-48e3-4717-a189-199fe947cce3
+      - uses: nitra/actions/forgejo-publish-release@v1
+        with:
+          token: ${{ steps.oidc.outputs.token }}
+          server-url: https://git.7n.ai
+          repository: 7n/g
+          tag: ${{ github.ref_name }}
