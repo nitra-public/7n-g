@@ -200,6 +200,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
         with: { pattern: release-*, path: release-assets, merge-multiple: true }
+      - name: Flatten Forgejo v3 artifact layout
+        run: find release-assets -mindepth 2 -type f -exec mv {} release-assets/ \;
       - uses: nitra/actions/release-manifest@v1
         with:
           output-directory: release-assets
